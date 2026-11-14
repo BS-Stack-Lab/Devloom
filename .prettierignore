@@ -1,0 +1,9 @@
+vendor/
+.tools/
+design/
+p0-spike/
+node_modules/
+**/dist/
+**/target/
+pnpm-lock.yaml
+**/Cargo.lock

@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/microsoft/vscode",
+  "commit": "69047191fc427f2f92828279aae1d90d8eeda7ab",
+  "version": "1.146.0",
+  "packageManager": "pnpm@12.16.0",
+  "node": "24.22.1",
+  "electron": "43.8.6",
+  "rust": "1.100.0",
+  "sourceDirectory": "vendor/code-oss",
+  "license": "MIT upstream; own code MIT",
+  "provenance": "Official immutable source SHA; acquisition and actual compile evidence stored in external workflow run; no upstream identity/license edits"
+}
