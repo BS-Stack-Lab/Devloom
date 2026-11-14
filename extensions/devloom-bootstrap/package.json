@@ -1,0 +1,31 @@
+{
+  "name": "devloom-bootstrap",
+  "publisher": "devloom",
+  "displayName": "Devloom Local Bootstrap",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.146.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "devloom.verifyLocalBridge",
+        "title": "Devloom: Verify Local Bridge"
+      },
+      {
+        "command": "devloom.restartLocalBridge",
+        "title": "Devloom: Restart Local Bridge"
+      },
+      {
+        "command": "devloom.stopLocalBridge",
+        "title": "Devloom: Stop Local Bridge"
+      }
+    ]
+  }
+}

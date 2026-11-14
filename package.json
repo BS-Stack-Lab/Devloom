@@ -1,0 +1,25 @@
+{
+  "name": "devloom",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "packageManager": "pnpm@12.16.0",
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "build": "node scripts/devloom.mjs build",
+    "test": "node --test dist/tests/framing.test.js dist/tests/bridge.test.js",
+    "test:extension": "node scripts/runExtensionHost.mjs",
+    "upstream:build": "node scripts/upstream.mjs build",
+    "prepare:local": "node scripts/devloom.mjs prepare",
+    "start": "node scripts/devloom.mjs start"
+  },
+  "devDependencies": {
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "eslint": "10.8.0",
+    "prettier": "3.9.9",
+    "typescript-eslint": "8.66.0",
+    "@types/node": "24.12.4"
+  }
+}
