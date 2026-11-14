@@ -1,0 +1,120 @@
+import * as vscode from 'vscode';
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { API } from '../vendor/code-oss/extensions/git/src/api/git';
+import { git, snapshot } from './localGitFixtures';
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+async function wait(path: string): Promise<void> {
+  const deadline = Date.now() + 40000;
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) throw new Error(`Fixture rendezvous timed out: ${path}`);
+    await delay(30);
+  }
+}
+export async function run(): Promise<void> {
+  const root = process.env.DEVLOOM_GIT_FIXTURE!;
+  const evidence = process.env.DEVLOOM_EVIDENCE_DIR!;
+  const role = process.env.DEVLOOM_GIT_PROFILE!;
+  const repositoryPath = process.env.DEVLOOM_GIT_REPOSITORY || join(root, 'repository');
+  const file = join(repositoryPath, 'fixture.txt');
+  const result: Record<string, unknown> = {
+    status: 'fail',
+    role,
+    pid: process.pid,
+    started: Date.now(),
+    repositoryPath,
+  };
+  try {
+    const extension = vscode.extensions.getExtension<{ getAPI(version: number): API }>(
+      'vscode.git',
+    );
+    assert.ok(extension);
+    const api = (await extension.activate()).getAPI(1);
+    const repository = await api.openRepository(vscode.Uri.file(repositoryPath));
+    assert.ok(repository);
+    await repository.status();
+    result.diagnostic = await vscode.commands.executeCommand(
+      'devloom.diagnoseLocalGit',
+      repository.rootUri,
+    );
+    if (role === 'a') {
+      writeFileSync(file, 'first host staged bytes\n');
+      await repository.add([file]);
+    } else {
+      await wait(join(root, 'ready-a'));
+      await repository.status();
+    }
+    writeFileSync(join(root, `ready-${role}`), String(process.pid));
+    await wait(join(root, `go-${role}`));
+    if (role === 'a') {
+      result.commitStarted = Date.now();
+      await repository.commit('first host coordinated commit');
+      result.commitCompleted = Date.now();
+      assert.equal(git(repositoryPath, ['show', 'HEAD:fixture.txt']), 'first host staged bytes');
+      await wait(join(root, 'finished-b'));
+    } else {
+      writeFileSync(file, 'second host working bytes\n');
+      result.requested = Date.now();
+      const scenario = process.env.DEVLOOM_GIT_SCENARIO;
+      if (scenario === 'alias') {
+        result.autofetchEnabled = Date.now();
+        await vscode.workspace
+          .getConfiguration('git')
+          .update('autofetch', 'all', vscode.ConfigurationTarget.Global);
+        await delay(200);
+        const stage = repository.add([file]);
+        writeFileSync(join(root, 'requested-b'), String(result.requested));
+        await stage;
+        result.completed = Date.now();
+        assert.equal(git(repositoryPath, ['show', ':fixture.txt']), 'second host working bytes');
+      } else {
+        await assert.rejects(repository.add([file]), (error: Error) => {
+          result.initialRejection = error.message;
+          return /state changed|Refresh Source Control/.test(error.message);
+        });
+        result.staleRejected = Date.now();
+        writeFileSync(join(root, 'requested-b'), String(result.requested));
+        if (scenario?.endsWith('crash')) {
+          await wait(join(root, 'crashed'));
+          await assert.rejects(
+            repository.add([file]),
+            /quarantined|coordinator|ECONNREFUSED|ENOENT/,
+          );
+          result.crashRejected = Date.now();
+        }
+        assert.equal(git(repositoryPath, ['show', ':fixture.txt']), 'first host staged bytes');
+      }
+      assert.equal(readFileSync(file, 'utf8'), 'second host working bytes\n');
+    }
+    result.final = snapshot(repositoryPath);
+    result.finalDiagnostic = await vscode.commands.executeCommand(
+      'devloom.diagnoseLocalGit',
+      repository.rootUri,
+    );
+    if (process.env.DEVLOOM_GIT_SCENARIO === 'alias' && role === 'b') {
+      for (
+        let attempt = 0;
+        attempt < 30 && !JSON.stringify(result.finalDiagnostic).includes('\"command\":\"fetch\"');
+        attempt++
+      ) {
+        await delay(100);
+        result.finalDiagnostic = await vscode.commands.executeCommand(
+          'devloom.diagnoseLocalGit',
+          repository.rootUri,
+        );
+      }
+      await vscode.workspace
+        .getConfiguration('git')
+        .update('autofetch', false, vscode.ConfigurationTarget.Global);
+      assert.match(JSON.stringify(result.finalDiagnostic), /\"command\":\"fetch\"/);
+    }
+    if (role === 'b') writeFileSync(join(root, 'finished-b'), 'done');
+    result.status = 'pass';
+  } catch (error) {
+    result.error = error instanceof Error ? error.stack : String(error);
+    throw error;
+  } finally {
+    writeFileSync(join(evidence, 'result.json'), JSON.stringify(result, null, 2));
+  }
+}

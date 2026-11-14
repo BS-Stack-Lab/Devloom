@@ -9,7 +9,13 @@
     "rootDir": ".",
     "skipLibCheck": true,
     "types": ["node"],
-    "paths": { "vscode": ["./vendor/code-oss/src/vscode-dts/vscode.d.ts"] }
+    "paths": {
+      "vscode": ["./vendor/code-oss/src/vscode-dts/vscode.d.ts"]
+    }
   },
-  "include": ["extensions/devloom-bootstrap/src/**/*.ts", "tests/**/*.ts"]
+  "include": [
+    "extensions/devloom-bootstrap/src/**/*.ts",
+    "tests/**/*.ts",
+    "product/localGit/**/*.ts"
+  ]
 }

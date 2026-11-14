@@ -1,0 +1,389 @@
+diff --git a/extensions/git/src/api/api1.ts b/extensions/git/src/api/api1.ts
+index 1fe06a3a..bc53a1d1 100644
+--- a/extensions/git/src/api/api1.ts
++++ b/extensions/git/src/api/api1.ts
+@@ -101,6 +101,8 @@ export class ApiRepository implements Repository {
+ 			filterEvent(this.#repository.onDidRunOperation, e => e.operation.kind === OperationKind.Checkout || e.operation.kind === OperationKind.CheckoutTracking), () => null);
+ 	}
+ 
++	diagnoseLocalGit(): Promise<object> { return this.#repository.diagnoseLocalGit(); }
++
+ 	apply(patch: string, reverse?: boolean): Promise<void>;
+ 	apply(patch: string, options?: { allowEmpty?: boolean; reverse?: boolean; threeWay?: boolean }): Promise<void>;
+ 	apply(patch: string, reverseOrOptions?: boolean | { allowEmpty?: boolean; reverse?: boolean; threeWay?: boolean }): Promise<void> {
+@@ -403,6 +405,7 @@ export class ApiGit implements Git {
+ 	constructor(model: Model) { this.#model = model; }
+ 
+ 	get path(): string { return this.#model.git.path; }
++	get version(): string { return this.#model.git.version; }
+ 
+ 	get env(): { [key: string]: string } {
+ 		if (this._env === undefined) {
+diff --git a/extensions/git/src/commands.ts b/extensions/git/src/commands.ts
+index 5d557198..e2f93bdb 100644
+--- a/extensions/git/src/commands.ts
++++ b/extensions/git/src/commands.ts
+@@ -9,7 +9,7 @@ import { Command, commands, Disposable, MessageOptions, Position, QuickPickItem,
+ import TelemetryReporter from '@vscode/extension-telemetry';
+ import type { CommitOptions, RemoteSourcePublisher, Remote, Branch, Ref } from './api/git';
+ import { ForcePushMode, GitErrorCodes, RefType, Status } from './api/git.constants';
+-import { Git, GitError, Repository as GitRepository, Stash, Worktree } from './git';
++import { devloomGit, Git, GitError, Repository as GitRepository, Stash, Worktree } from './git';
+ import { Model } from './model';
+ import { GitResourceGroup, Repository, Resource, ResourceGroupType } from './repository';
+ import { DiffEditorSelectionHunkToolbarContext, LineChange, applyLineChanges, getIndexDiffInformation, getModifiedRange, getWorkingTreeDiffInformation, intersectDiffWithRange, invertLineChange, toLineChanges, toLineRanges, compareLineChanges } from './staging';
+@@ -1703,7 +1703,7 @@ export class CommandCenter {
+ 	@command('git.diff.stageHunk')
+ 	async diffStageHunk(changes: DiffEditorSelectionHunkToolbarContext | undefined): Promise<void> {
+ 		if (changes) {
+-			this.diffStageHunkOrSelection(changes);
++			await this.diffStageHunkOrSelection(changes);
+ 		} else {
+ 			await this.stageHunkAtCursor();
+ 		}
+@@ -1711,7 +1711,7 @@ export class CommandCenter {
+ 
+ 	@command('git.diff.stageSelection')
+ 	async diffStageSelection(changes: DiffEditorSelectionHunkToolbarContext | undefined): Promise<void> {
+-		this.diffStageHunkOrSelection(changes);
++		await this.diffStageHunkOrSelection(changes);
+ 	}
+ 
+ 	async diffStageHunkOrSelection(changes: DiffEditorSelectionHunkToolbarContext | undefined): Promise<void> {
+@@ -1719,6 +1719,11 @@ export class CommandCenter {
+ 			return;
+ 		}
+ 
++		if (typeof changes.modifiedUri?.fsPath !== 'string' || typeof changes.originalWithModifiedChanges !== 'string') { throw new Error(l10n.t('Refresh the diff before staging.')); }
++		const repository = this.model.getRepository(changes.modifiedUri);
++		if (!repository || typeof changes.originalBaseline !== 'string' || !Number.isInteger(changes.modifiedVersion) || changes.modifiedVersion < 1) { throw new Error(l10n.t('Refresh the diff before staging.')); }
++		const intent = repository.captureGitIntent();
++		const disk = devloomGit.fileFingerprint(changes.modifiedUri.fsPath);
+ 		let modifiedUri = changes.modifiedUri;
+ 		let modifiedDocument: TextDocument | undefined;
+ 
+@@ -1739,9 +1744,12 @@ export class CommandCenter {
+ 			modifiedDocument = await workspace.openTextDocument(modifiedUri);
+ 		}
+ 
++		const document = modifiedDocument;
++		const guard = () => { if (document.version !== changes.modifiedVersion || devloomGit.fileFingerprint(changes.modifiedUri.fsPath) !== disk) { throw new Error(l10n.t('The document changed. Refresh the diff before staging.')); } };
++		guard();
+ 		const result = changes.originalWithModifiedChanges;
+ 		await this.runByRepository(modifiedUri, async (repository, resource) =>
+-			await repository.stage(resource, result, modifiedDocument.encoding));
++			await repository.stage(resource, result, modifiedDocument.encoding, intent, guard, changes.originalBaseline));
+ 	}
+ 
+ 	private async stageHunkAtCursor(): Promise<void> {
+@@ -1940,6 +1948,14 @@ export class CommandCenter {
+ 	private async _stageChanges(textEditor: TextEditor, changes: LineChange[]): Promise<void> {
+ 		const modifiedDocument = textEditor.document;
+ 		const modifiedUri = modifiedDocument.uri;
++		const repository = this.model.getRepository(modifiedUri);
++		if (!repository) { return; }
++		const intent = repository.captureGitIntent();
++		const version = modifiedDocument.version;
++		const disk = devloomGit.fileFingerprint(modifiedUri.fsPath);
++		const diff = getWorkingTreeDiffInformation(textEditor);
++		if (!diff || diff.isStale || diff.documentVersion !== version) { throw new Error(l10n.t('Refresh the diff before staging.')); }
++		const guard = () => { if (modifiedDocument.version !== version || devloomGit.fileFingerprint(modifiedUri.fsPath) !== disk) { throw new Error(l10n.t('The document changed. Refresh the diff before staging.')); } };
+ 
+ 		if (modifiedUri.scheme !== 'file') {
+ 			return;
+@@ -1947,10 +1963,11 @@ export class CommandCenter {
+ 
+ 		const originalUri = toGitUri(modifiedUri, '~');
+ 		const originalDocument = await workspace.openTextDocument(originalUri);
++		const preparedBaseline = originalDocument.getText();
+ 		const result = applyLineChanges(originalDocument, modifiedDocument, changes);
+ 
+ 		await this.runByRepository(modifiedUri, async (repository, resource) =>
+-			await repository.stage(resource, result, modifiedDocument.encoding));
++			await repository.stage(resource, result, modifiedDocument.encoding, intent, guard, preparedBaseline));
+ 	}
+ 
+ 	@command('git.revertChange')
+@@ -2076,6 +2093,11 @@ export class CommandCenter {
+ 			return;
+ 		}
+ 
++		const intent = repository.captureGitIntent();
++		const version = modifiedDocument.version;
++		const indexBaseline = modifiedDocument.getText();
++		const disk = devloomGit.fileFingerprint(modifiedUri.fsPath);
++		const guard = () => { if (modifiedDocument.version !== version || devloomGit.fileFingerprint(modifiedUri.fsPath) !== disk) { throw new Error(l10n.t('The document changed. Refresh the diff before staging.')); } };
+ 		const resource = repository.indexGroup.resourceStates
+ 			.find(r => pathEquals(r.resourceUri.fsPath, modifiedUri.fsPath));
+ 		if (!resource) {
+@@ -2083,7 +2105,7 @@ export class CommandCenter {
+ 		}
+ 
+ 		const indexDiffInformation = getIndexDiffInformation(textEditor);
+-		if (!indexDiffInformation) {
++		if (!indexDiffInformation || indexDiffInformation.isStale || indexDiffInformation.documentVersion !== version) {
+ 			return;
+ 		}
+ 
+@@ -2117,8 +2139,9 @@ export class CommandCenter {
+ 		const selectedDiffsInverted = selectedDiffs.map(invertLineChange);
+ 		this.logger.trace(`[CommandCenter][unstageSelectedRanges] selectedDiffsInverted: ${JSON.stringify(selectedDiffsInverted)}`);
+ 
++		const headBaseline = originalDocument.getText();
+ 		const result = applyLineChanges(modifiedDocument, originalDocument, selectedDiffsInverted);
+-		await repository.stage(modifiedDocument.uri, result, modifiedDocument.encoding);
++		await repository.stage(modifiedDocument.uri, result, modifiedDocument.encoding, intent, guard, indexBaseline, headBaseline);
+ 	}
+ 
+ 	@command('git.unstageFile')
+@@ -2162,6 +2185,14 @@ export class CommandCenter {
+ 	private async _unstageChanges(textEditor: TextEditor, changes: LineChange[]): Promise<void> {
+ 		const modifiedDocument = textEditor.document;
+ 		const modifiedUri = modifiedDocument.uri;
++		const repository = this.model.getRepository(modifiedUri);
++		if (!repository) { return; }
++		const intent = repository.captureGitIntent();
++		const version = modifiedDocument.version;
++		const disk = devloomGit.fileFingerprint(modifiedUri.fsPath);
++		const diff = getWorkingTreeDiffInformation(textEditor);
++		if (!diff || diff.isStale || diff.documentVersion !== version) { throw new Error(l10n.t('Refresh the diff before staging.')); }
++		const guard = () => { if (modifiedDocument.version !== version || devloomGit.fileFingerprint(modifiedUri.fsPath) !== disk) { throw new Error(l10n.t('The document changed. Refresh the diff before staging.')); } };
+ 
+ 		if (modifiedUri.scheme !== 'file') {
+ 			return;
+@@ -2181,12 +2212,15 @@ export class CommandCenter {
+ 		const changesInverted = changes.map(invertLineChange);
+ 		const diffsInverted = [...changesInverted, ...workingTreeDiffsInverted].sort(compareLineChanges);
+ 
++		const indexDocument = await workspace.openTextDocument(toGitUri(modifiedUri, '~'));
++		const indexBaseline = indexDocument.getText();
+ 		const originalUri = toGitUri(modifiedUri, 'HEAD');
+ 		const originalDocument = await workspace.openTextDocument(originalUri);
++		const preparedBaseline = originalDocument.getText();
+ 		const result = applyLineChanges(modifiedDocument, originalDocument, diffsInverted);
+ 
+ 		await this.runByRepository(modifiedUri, async (repository, resource) =>
+-			await repository.stage(resource, result, modifiedDocument.encoding));
++			await repository.stage(resource, result, modifiedDocument.encoding, intent, guard, indexBaseline, preparedBaseline));
+ 	}
+ 
+ 	@command('git.clean')
+diff --git a/extensions/git/src/git.ts b/extensions/git/src/git.ts
+index 2c0e5c48..dab08d48 100644
+--- a/extensions/git/src/git.ts
++++ b/extensions/git/src/git.ts
+@@ -8,16 +8,37 @@ import * as path from 'path';
+ import * as os from 'os';
+ import * as cp from 'child_process';
+ import { fileURLToPath } from 'url';
++import { createRequire } from 'node:module';
++import { env } from 'vscode';
+ import which from 'which';
+ import { EventEmitter } from 'events';
+ import { fileTypeFromBuffer } from 'file-type';
+ import { assign, groupBy, IDisposable, toDisposable, dispose, mkdirp, readBytes, detectUnicodeEncoding, Encoding, onceEvent, splitInChunks, Limiter, Versions, isWindows, pathEquals, isMacintosh, isDescendant, relativePathWithNoFallback, Mutable } from './util';
+-import { CancellationError, CancellationToken, ConfigurationChangeEvent, LogOutputChannel, Progress, Uri, workspace } from 'vscode';
++import { CancellationError, CancellationToken, ConfigurationChangeEvent, LogOutputChannel, Progress, Uri, workspace, l10n } from 'vscode';
+ import type { Commit as ApiCommit, Ref, Branch, Remote, LogOptions, Change, CommitOptions, RefQuery as ApiRefQuery, InitOptions, DiffChange, Worktree as ApiWorktree } from './api/git';
+ import { RefType, ForcePushMode, GitErrorCodes, Status } from './api/git.constants';
+ import * as byline from 'byline';
+ import { StringDecoder } from 'string_decoder';
+ 
++export interface DevloomSnapshot {
++	root: string; common: string; worktree: string; head: string; index: string; generation: number; destination: boolean;
++}
++export const devloomGit = createRequire(__filename)(path.resolve(env.appRoot, '..', '..', 'dist/product/localGit/mutationClient.js')) as {
++	capture(root: string, generation?: number, destination?: boolean): DevloomSnapshot;
++	fileFingerprint(path: string): string;
++	inLease(): boolean;
++	assertFresh(): void;
++	assertSpawn(args: string[], trusted: boolean, cwd?: string): boolean;
++	track(child: cp.ChildProcess, command?: string): void;
++	client: {
++		run<T>(snapshot: DevloomSnapshot, kind: 'repository' | 'init' | 'clone', action: () => Promise<T>): Promise<T>;
++		diagnose(): Promise<object>;
++	};
++};
++if (typeof devloomGit.capture !== 'function' || typeof devloomGit.client?.run !== 'function') {
++	throw new Error(l10n.t('Invalid Devloom Git coordinator module'));
++}
++
+ // https://github.com/microsoft/vscode/issues/65693
+ const MAX_CLI_LENGTH = 30000;
+ 
+@@ -438,7 +459,7 @@ export class Git {
+ 			args.push('-b', options.defaultBranch);
+ 		}
+ 
+-		await this.exec(repository, args);
++		await devloomGit.client.run(devloomGit.capture(repository, 0, true), 'init', () => this.exec(repository, args));
+ 	}
+ 
+ 	async clone(url: string, options: ICloneOptions, cancellationToken?: CancellationToken): Promise<string> {
+@@ -492,11 +513,12 @@ export class Git {
+ 			if (options.ref) {
+ 				command.push('--branch', options.ref);
+ 			}
+-			await this.exec(options.parentPath, command, {
++			if (/^[\s-]|[\r\n\0]/.test(folderName) || /^[\s-]|[\r\n\0]/.test(url)) { throw new Error(l10n.t('Invalid clone destination or URL')); }
++			await devloomGit.client.run(devloomGit.capture(folderPath, 0, true), 'clone', () => this.exec(options.parentPath, command, {
+ 				cancellationToken,
+ 				env: { 'GIT_HTTP_USER_AGENT': this.userAgent },
+ 				onSpawn,
+-			});
++			}));
+ 		} catch (err) {
+ 			if (err.stderr) {
+ 				err.stderr = err.stderr.replace(/^Cloning.+$/m, '').trim();
+@@ -707,7 +729,11 @@ export class Git {
+ 			options.cwd = sanitizePath(cwd);
+ 		}
+ 
++		const readOnly = devloomGit.assertSpawn(args, workspace.isTrusted, cwd);
++		if (!readOnly && this.compareGitVersionTo('2.28.0') < 0) { throw new Error(l10n.t('Install Git 2.28 or later before modifying this repository.')); }
++		if (readOnly) { options.env.GIT_OPTIONAL_LOCKS = '0'; }
+ 		const child = cp.spawn(this.path, args, options);
++		devloomGit.track(child, args[0]);
+ 
+ 		// Writing to stdin fails with EPIPE when git fails to spawn or exits before
+ 		// reading all of its input. The child's `error`/`exit` events already report
+diff --git a/extensions/git/src/repository.ts b/extensions/git/src/repository.ts
+index ccb262ad..a8ca8c5b 100644
+--- a/extensions/git/src/repository.ts
++++ b/extensions/git/src/repository.ts
+@@ -19,7 +19,7 @@ import { ForcePushMode, GitErrorCodes, RefType, Status } from './api/git.constan
+ import { AutoFetcher } from './autofetch';
+ import { GitBranchProtectionProvider, IBranchProtectionProviderRegistry } from './branchProtection';
+ import { debounce, memoize, sequentialize, throttle } from './decorators';
+-import { Repository as BaseRepository, BlameInformation, Commit, CommitShortStat, GitError, IDotGit, LogFileOptions, LsTreeElement, PullOptions, RefQuery, Stash, Submodule, Worktree } from './git';
++import { Repository as BaseRepository, BlameInformation, Commit, CommitShortStat, devloomGit, DevloomSnapshot, GitError, IDotGit, LogFileOptions, LsTreeElement, PullOptions, RefQuery, Stash, Submodule, Worktree } from './git';
+ import { GitHistoryProvider } from './historyProvider';
+ import { Operation, OperationKind, OperationManager, OperationResult } from './operation';
+ import { CommitCommandsCenter, IPostCommitCommandsProviderRegistry } from './postCommitCommands';
+@@ -1320,7 +1320,41 @@ export class Repository implements Disposable {
+ 		await this.run(Operation.Remove, () => this.repository.rm(resources.map(r => r.fsPath)));
+ 	}
+ 
+-	async stage(resource: Uri, contents: string, encoding: string): Promise<void> {
++	private devloomGeneration = 0;
++	private devloomModelSnapshot: DevloomSnapshot | undefined;
++	captureGitIntent(): DevloomSnapshot {
++		return { ...(this.devloomModelSnapshot ?? devloomGit.capture(this.root)), generation: this.devloomGeneration };
++	}
++	async diagnoseLocalGit(): Promise<object> {
++		return { protocol: 1, trusted: workspace.isTrusted, coordinator: await devloomGit.client.diagnose() };
++	}
++	private async devloomReadBaseline(ref: '' | 'HEAD', resource: Uri, encoding: string, intent: DevloomSnapshot): Promise<string> {
++		if (ref === 'HEAD' && intent.head.endsWith(':unborn')) { return ''; }
++		if (ref === '') {
++			const entries = await this.repository.lsfiles(resource.fsPath);
++			if (entries.length === 0) { return ''; }
++			if (entries.some(entry => entry.stage !== '0')) { throw new Error(l10n.t('Resolve index conflicts before staging selected content.')); }
++		} else if ((await this.repository.lstree(ref, resource.fsPath)).length === 0) { return ''; }
++		return await workspace.decode(await this.repository.buffer(ref, resource.fsPath), { encoding });
++	}
++	async stage(resource: Uri, contents: string, encoding: string, intent?: DevloomSnapshot, guard?: () => void, baseline?: string, headBaseline?: string): Promise<void> {
++		if (intent && !devloomGit.inLease()) {
++			return devloomGit.client.run(intent, 'repository', async () => {
++				if (intent.generation !== this.devloomGeneration) { throw new Error(l10n.t('Git state changed. Refresh Source Control and review the changes.')); }
++				guard?.();
++				if (baseline !== undefined) {
++					const actual = await this.devloomReadBaseline('', resource, encoding, intent);
++					if (actual !== baseline) { throw new Error(l10n.t('The index changed. Refresh the diff before staging.')); }
++				}
++				if (headBaseline !== undefined) {
++					const actual = await this.devloomReadBaseline('HEAD', resource, encoding, intent);
++					if (actual !== headBaseline) { throw new Error(l10n.t('HEAD changed. Refresh the diff before staging.')); }
++				}
++				guard?.();
++				await this.stage(resource, contents, encoding);
++			});
++		}
++
+ 		await this.run(Operation.Stage, async () => {
+ 			const data = await workspace.encode(contents, { encoding });
+ 			await this.repository.stage(resource.fsPath, data);
+@@ -2863,9 +2897,19 @@ export class Repository implements Disposable {
+ 	private async run<T>(
+ 		operation: Operation,
+ 		runOperation: () => Promise<T> = () => Promise.resolve(null) as Promise<T>,
+-		getOptimisticResourceGroups: () => GitResourceGroups | undefined = () => undefined
++		getOptimisticResourceGroups: () => GitResourceGroups | undefined = () => undefined,
++		devloomCoordinated = false
+ 	): Promise<T> {
+ 
++		const pureRefresh = operation.kind === OperationKind.Status || operation.kind === OperationKind.Refresh;
++		if (!operation.readOnly && !pureRefresh && !devloomCoordinated) {
++			const intent = this.captureGitIntent();
++			return devloomGit.client.run(intent, 'repository', () => {
++				if (intent.generation !== this.devloomGeneration) { throw new Error(l10n.t('Git state changed. Refresh Source Control and review the changes.')); }
++				return this.run(operation, runOperation, getOptimisticResourceGroups, true);
++			});
++		}
++
+ 		if (this.state !== RepositoryState.Idle) {
+ 			throw new Error('Repository not initialized');
+ 		}
+@@ -2989,6 +3033,7 @@ export class Repository implements Disposable {
+ 
+ 		while (true) {
+ 			try {
++				if (attempt > 0 && !operation.readOnly) { devloomGit.assertFresh(); }
+ 				attempt++;
+ 				return await runOperation();
+ 			} catch (err) {
+@@ -3030,6 +3075,9 @@ export class Repository implements Disposable {
+ 
+ 		this.updateModelStateCancellationTokenSource = new CancellationTokenSource();
+ 		await this._updateModelState(optimisticResourcesGroups, this.updateModelStateCancellationTokenSource.token);
++		const snapshot = devloomGit.capture(this.root);
++		if (this.devloomModelSnapshot && (snapshot.head !== this.devloomModelSnapshot.head || snapshot.index !== this.devloomModelSnapshot.index)) { this.devloomGeneration++; }
++		this.devloomModelSnapshot = { ...snapshot, generation: this.devloomGeneration };
+ 	}
+ 
+ 	private async _updateModelState(optimisticResourcesGroups?: GitResourceGroups, cancellationToken?: CancellationToken): Promise<void> {
+diff --git a/extensions/git/src/staging.ts b/extensions/git/src/staging.ts
+index 14f10187..bc9efa40 100644
+--- a/extensions/git/src/staging.ts
++++ b/extensions/git/src/staging.ts
+@@ -233,6 +233,8 @@ export interface DiffEditorSelectionHunkToolbarContext {
+ 	 * The original text with the selected modified changes applied.
+ 	*/
+ 	originalWithModifiedChanges: string;
++	originalBaseline: string;
++	modifiedVersion: number;
+ 
+ 	modifiedUri: Uri;
+ 	originalUri: Uri;
+diff --git a/src/vs/editor/browser/widget/diffEditor/features/gutterFeature.ts b/src/vs/editor/browser/widget/diffEditor/features/gutterFeature.ts
+index 50d5fb2a..d36db012 100644
+--- a/src/vs/editor/browser/widget/diffEditor/features/gutterFeature.ts
++++ b/src/vs/editor/browser/widget/diffEditor/features/gutterFeature.ts
+@@ -170,6 +170,10 @@ export class DiffEditorGutter extends Disposable {
+ 		}, { passive: false }));
+ 	}
+ 
++	public stagingProvenance(): { originalBaseline: string; modifiedVersion: number } {
++		return { originalBaseline: this._editors.original.getModel()!.getValue(), modifiedVersion: this._editors.modifiedModel.get()!.getVersionId() };
++	}
++
+ 	public computeStagedValue(mapping: DetailedLineRangeMapping): string {
+ 		const c = mapping.innerChanges ?? [];
+ 		const modified = new TextModelText(this._editors.modifiedModel.get()!);
+@@ -264,6 +268,7 @@ class DiffToolBar extends Disposable implements IGutterItemView {
+ 					const mapping = item.mapping;
+ 					return {
+ 						mapping,
++						...gutter.stagingProvenance(),
+ 						originalWithModifiedChanges: gutter.computeStagedValue(mapping),
+ 						originalUri: item.originalUri,
+ 						modifiedUri: item.modifiedUri,
+@@ -325,6 +330,8 @@ export interface DiffEditorSelectionHunkToolbarContext {
+ 	 * The original text with the selected modified changes applied.
+ 	*/
+ 	originalWithModifiedChanges: string;
++	originalBaseline: string;
++	modifiedVersion: number;
+ 
+ 	modifiedUri: URI;
+ 	originalUri: URI;

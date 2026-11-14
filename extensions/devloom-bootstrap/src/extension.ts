@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import { join } from 'node:path';
+import { registerLocalGit } from './localGit';
 import { BridgeClient } from './bridgeClient';
 let bridge: BridgeClient | undefined;
 export function activate(context: vscode.ExtensionContext) {
+  registerLocalGit(context);
   bridge = new BridgeClient(
     join(
       context.extensionPath,

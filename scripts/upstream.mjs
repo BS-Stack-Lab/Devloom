@@ -1,3 +1,4 @@
+import { auditPatches } from './patchUpstream.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -8,6 +9,7 @@ export const upstream = resolve(root, 'vendor/code-oss');
 const PIN = '69047191fc427f2f92828279aae1d90d8eeda7ab';
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
 export function check() {
+  auditPatches(root, upstream, true);
   const lock = readJson(resolve(root, 'upstream.lock.json'));
   const head = execFileSync('git', ['rev-parse', 'HEAD'], {
     cwd: upstream,
