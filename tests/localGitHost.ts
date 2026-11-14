@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { API } from '../vendor/code-oss/extensions/git/src/api/git';
+import { verifyRouting, verifyCloneCancellation } from './localGitSafetyHost';
 import { git, baseline, changed, selected, snapshot } from './localGitFixtures';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function run(): Promise<void> {
@@ -208,6 +209,8 @@ export async function run(): Promise<void> {
     assert.equal(git(repositoryPath, ['show', ':peer.txt']), 'terminal staged bytes');
     assert.equal(git(repositoryPath, ['show', ':fixture.txt']), 'hook staged bytes');
     git(repositoryPath, ['fsck', '--no-dangling']);
+    result.routing = await verifyRouting(root, repository);
+    result.cancellation = await verifyCloneCancellation(root, api, repository);
     result.final = snapshot(repositoryPath);
     result.finalDiagnostic = await vscode.commands.executeCommand(
       'devloom.diagnoseLocalGit',

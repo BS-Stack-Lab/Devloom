@@ -1,4 +1,4 @@
-import { isReadOnly } from './commandPolicy';
+import { isReadOnly, validateEnvironment } from './commandPolicy';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -181,7 +181,13 @@ export function track(child: ChildProcess, command?: string): void {
   });
   lease.children.add(closed);
 }
-export function assertSpawn(args: string[], trusted: boolean, cwd?: string): boolean {
+export function assertSpawn(
+  args: string[],
+  trusted: boolean,
+  cwd?: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  validateEnvironment(environment);
   if (!trusted) throw new Error('Trust this workspace before using repository Git.');
   const lease = context.getStore();
   if (lease && (!lease.active || lease.socket.destroyed)) throw new Error(recovery);

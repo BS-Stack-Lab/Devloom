@@ -1,5 +1,5 @@
 diff --git a/extensions/git/src/api/api1.ts b/extensions/git/src/api/api1.ts
-index 1fe06a3a..bc53a1d1 100644
+index 1fe06a3a..ba1e80a8 100644
 --- a/extensions/git/src/api/api1.ts
 +++ b/extensions/git/src/api/api1.ts
 @@ -101,6 +101,8 @@ export class ApiRepository implements Repository {
@@ -19,6 +19,74 @@ index 1fe06a3a..bc53a1d1 100644
  
  	get env(): { [key: string]: string } {
  		if (this._env === undefined) {
+@@ -494,9 +497,9 @@ export class ApiImpl implements API {
+ 		return this.getRepository(root) || null;
+ 	}
+ 
+-	async clone(uri: Uri, options?: CloneOptions): Promise<Uri | null> {
++	async clone(uri: Uri, options?: CloneOptions, cancellationToken?: CancellationToken): Promise<Uri | null> {
+ 		const parentPath = options?.parentPath?.fsPath;
+-		const result = await this.#cloneManager.clone(uri.toString(), { parentPath, recursive: options?.recursive, ref: options?.ref, postCloneAction: options?.postCloneAction });
++		const result = await this.#cloneManager.clone(uri.toString(), { parentPath, recursive: options?.recursive, ref: options?.ref, postCloneAction: options?.postCloneAction, cancellationToken });
+ 		return result ? Uri.file(result) : null;
+ 	}
+ 
+diff --git a/extensions/git/src/cloneManager.ts b/extensions/git/src/cloneManager.ts
+index 3968cc4b..7acfc7db 100644
+--- a/extensions/git/src/cloneManager.ts
++++ b/extensions/git/src/cloneManager.ts
+@@ -7,7 +7,7 @@ import * as path from 'path';
+ import * as fs from 'fs';
+ import * as os from 'os';
+ import { pickRemoteSource } from './remoteSource';
+-import { l10n, workspace, window, Uri, ProgressLocation, commands } from 'vscode';
++import { l10n, workspace, window, Uri, ProgressLocation, commands, CancellationToken, CancellationTokenSource, Disposable, CancellationError } from 'vscode';
+ import { RepositoryCache, RepositoryCacheInfo } from './repositoryCache';
+ import TelemetryReporter from '@vscode/extension-telemetry';
+ import { Model } from './model';
+@@ -18,6 +18,7 @@ enum PostCloneAction { Open, OpenNewWindow, AddToWorkspace, None }
+ 
+ export interface CloneOptions {
+ 	parentPath?: string;
++	cancellationToken?: CancellationToken;
+ 	ref?: string;
+ 	recursive?: boolean;
+ 	postCloneAction?: ApiPostCloneAction;
+@@ -30,6 +31,7 @@ export class CloneManager {
+ 		private readonly repositoryCache: RepositoryCache) { }
+ 
+ 	async clone(url?: string, options: CloneOptions = {}) {
++		if (options.cancellationToken?.isCancellationRequested) { throw new CancellationError(); }
+ 		if (!url || typeof url !== 'string') {
+ 			url = await pickRemoteSource({
+ 				providerLabel: provider => l10n.t('Clone from {0}', provider.name),
+@@ -58,7 +60,7 @@ export class CloneManager {
+ 		return this.cloneRepository(url, options.parentPath, options);
+ 	}
+ 
+-	private async cloneRepository(url: string, parentPath?: string, options: { recursive?: boolean; ref?: string; postCloneAction?: ApiPostCloneAction } = {}): Promise<string | undefined> {
++	private async cloneRepository(url: string, parentPath?: string, options: { recursive?: boolean; ref?: string; postCloneAction?: ApiPostCloneAction; cancellationToken?: CancellationToken } = {}): Promise<string | undefined> {
+ 		if (!parentPath) {
+ 			const config = workspace.getConfiguration('git');
+ 			let defaultCloneDirectory = config.get<string>('defaultCloneDirectory') || os.homedir();
+@@ -101,7 +103,16 @@ export class CloneManager {
+ 
+ 			const repositoryPath = await window.withProgress(
+ 				opts,
+-				(progress, token) => this.model.git.clone(url!, { parentPath: parentPath!, progress, recursive: options.recursive, ref: options.ref }, token)
++				async (progress, token) => {
++					const source = new CancellationTokenSource();
++					const disposables: Disposable[] = [source];
++					try {
++						disposables.push(token.onCancellationRequested(() => source.cancel()));
++						if (options.cancellationToken) { disposables.push(options.cancellationToken.onCancellationRequested(() => source.cancel())); }
++						if (token.isCancellationRequested || options.cancellationToken?.isCancellationRequested) { source.cancel(); }
++						return await this.model.git.clone(url!, { parentPath: parentPath!, progress, recursive: options.recursive, ref: options.ref }, source.token);
++					} finally { Disposable.from(...disposables).dispose(); }
++				}
+ 			);
+ 
+ 			await this.doPostCloneAction(repositoryPath, options.postCloneAction);
 diff --git a/extensions/git/src/commands.ts b/extensions/git/src/commands.ts
 index 5d557198..e2f93bdb 100644
 --- a/extensions/git/src/commands.ts
@@ -169,7 +237,7 @@ index 5d557198..e2f93bdb 100644
  
  	@command('git.clean')
 diff --git a/extensions/git/src/git.ts b/extensions/git/src/git.ts
-index 2c0e5c48..dab08d48 100644
+index 2c0e5c48..936f0f36 100644
 --- a/extensions/git/src/git.ts
 +++ b/extensions/git/src/git.ts
 @@ -8,16 +8,37 @@ import * as path from 'path';
@@ -197,7 +265,7 @@ index 2c0e5c48..dab08d48 100644
 +	fileFingerprint(path: string): string;
 +	inLease(): boolean;
 +	assertFresh(): void;
-+	assertSpawn(args: string[], trusted: boolean, cwd?: string): boolean;
++	assertSpawn(args: string[], trusted: boolean, cwd?: string, environment?: NodeJS.ProcessEnv): boolean;
 +	track(child: cp.ChildProcess, command?: string): void;
 +	client: {
 +		run<T>(snapshot: DevloomSnapshot, kind: 'repository' | 'init' | 'clone', action: () => Promise<T>): Promise<T>;
@@ -235,18 +303,27 @@ index 2c0e5c48..dab08d48 100644
  		} catch (err) {
  			if (err.stderr) {
  				err.stderr = err.stderr.replace(/^Cloning.+$/m, '').trim();
-@@ -707,7 +729,11 @@ export class Git {
+@@ -707,7 +729,12 @@ export class Git {
  			options.cwd = sanitizePath(cwd);
  		}
  
-+		const readOnly = devloomGit.assertSpawn(args, workspace.isTrusted, cwd);
++		const readOnly = devloomGit.assertSpawn(args, workspace.isTrusted, cwd, options.env);
 +		if (!readOnly && this.compareGitVersionTo('2.28.0') < 0) { throw new Error(l10n.t('Install Git 2.28 or later before modifying this repository.')); }
 +		if (readOnly) { options.env.GIT_OPTIONAL_LOCKS = '0'; }
++		if (options.cancellationToken?.isCancellationRequested) { throw new CancellationError(); }
  		const child = cp.spawn(this.path, args, options);
 +		devloomGit.track(child, args[0]);
  
  		// Writing to stdin fails with EPIPE when git fails to spawn or exits before
  		// reading all of its input. The child's `error`/`exit` events already report
+@@ -1461,6 +1488,7 @@ export class Repository {
+ 			return result.stdout.trim();
+ 		}
+ 		catch (err) {
++			if (err.code === 'DevloomGitPolicy') { throw err; }
+ 			this.logger.warn(`[Git][config] git config failed: ${err.message}`);
+ 			return '';
+ 		}
 diff --git a/extensions/git/src/repository.ts b/extensions/git/src/repository.ts
 index ccb262ad..a8ca8c5b 100644
 --- a/extensions/git/src/repository.ts

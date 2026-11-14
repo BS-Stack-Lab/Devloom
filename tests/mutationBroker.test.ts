@@ -182,7 +182,7 @@ test('unsafe endpoint and untrusted/unknown mutation fail before process executi
     symlinkSync(f.repo, alias);
     assert.throws(() => new MutationBroker(alias), /Unsafe/);
     assert.throws(() => assertSpawn(['status'], false), /Trust/);
-    assert.throws(() => assertSpawn(['-c', 'a=b', 'fetch'], true), /coordinator/);
+    assert.throws(() => assertSpawn(['-c', 'a=b', 'fetch'], true), /coordinator|configuration/);
     assert.throws(
       () => assertSpawn(['config', '--global', '--add', 'safe.directory', f.repo], true),
       /Global/,
