@@ -229,3 +229,60 @@ test('real duplicate pending ID is rejected once and original delay is discarded
   ]);
   assert.equal(frames.filter((value) => (value as { id: number }).id === 2).length, 1);
 });
+
+test(
+  'actual Rust completion and cancellation settle exactly once in both orders and contention',
+  { timeout: 10000 },
+  async () => {
+    const client = new BridgeClient(binary);
+    await client.start();
+    try {
+      for (const order of ['cancel-first', 'complete-first', 'contended']) {
+        for (let iteration = 0; iteration < 12; iteration++) {
+          const controller = new AbortController();
+          let settlements = 0;
+          const text = `${order}-${iteration}`;
+          const terminal = client
+            .request(
+              'delay',
+              { text, delayMs: order === 'contended' ? 1 : 0 },
+              { signal: controller.signal },
+            )
+            .then(
+              (value) => {
+                settlements++;
+                return { kind: 'success', value };
+              },
+              (error: unknown) => {
+                settlements++;
+                return { kind: 'cancelled', error };
+              },
+            );
+          if (order === 'cancel-first') controller.abort();
+          let outcome;
+          if (order === 'complete-first') {
+            outcome = await terminal;
+            await sleep(1);
+            controller.abort();
+          } else if (order === 'contended') {
+            await sleep(1);
+            controller.abort();
+            outcome = await terminal;
+          } else outcome = await terminal;
+          await sleep(3);
+          assert.equal(settlements, 1);
+          assert.equal(client.diagnostics.pending, 0);
+          if (order === 'cancel-first') assert.equal(outcome.kind, 'cancelled');
+          if (order === 'complete-first') assert.equal(outcome.kind, 'success');
+          if ('error' in outcome) assert.match(String(outcome.error), /Cancelled/);
+          else assert.deepEqual(outcome.value, { text });
+          assert.deepEqual(await client.request('echo', { text: `after-${text}` }), {
+            text: `after-${text}`,
+          });
+        }
+      }
+    } finally {
+      await client.stop();
+    }
+  },
+);
