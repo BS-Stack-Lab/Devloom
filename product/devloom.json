@@ -1,1 +1,6 @@
-{ "nameShort": "Devloom IDE", "nameLong": "Devloom IDE" }
+{
+  "nameShort": "Devloom IDE",
+  "nameLong": "Devloom IDE",
+  "applicationName": "devloom",
+  "dataFolderName": ".devloom"
+}
