@@ -99,3 +99,18 @@ Every invocation requires an absolute evidence parent outside this repository, r
 Exit 0 means collection completed, including when license coverage is partial. Exit 2 preserves a report with incomplete collection, such as missing required inputs, invalid component manifests, offline cache failures or bounds reached. Exit 1 means an argument/output, source pin/integrity, patch or Git policy failure prevented a trustworthy inventory. No exit code grants legal approval. Restore required local inputs or inspect safe diagnostic codes before retrying; the command never installs dependencies or fetches objects.
 
 Scanning is bounded to 500000 directory entries, depth 32, 8 MiB manifests, 64 MiB license files, 1 GiB binary files, 8 GiB total hashed bytes and 32 MiB/30 seconds per metadata subprocess. Symlink resolution is limited to explicit component roots; unsafe links and unsupported metadata are reported. Known fixed identity text may compare CRLF worktree bytes against LF source bytes using a built-in comparison; reported hashes always retain the original raw bytes. These checks do not provide an OS sandbox against concurrent filesystem replacement, a complete binary dependency graph, a distribution BOM or legal approval. Current execution validation covers macOS arm64 only.
+
+## Command and requirement catalog
+
+```sh
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence node scripts/commandCatalog.mjs
+node --test tests/commandCatalog*.test.mjs
+```
+
+The offline catalog uses the same pinned Node 24.22.1 and read-only Git 2.53.0 policy as the component inventory. It verifies six immutable manifest/NLS hashes for the fixed git, github and github-authentication extensions before enumerating 192 command declarations, 113 settings, 454 menu entries and 9 submenu definitions. Raw payload order, JSON pointers, labels and reference context remain traceable. Other contribution points are explicitly deferred. These are source declarations; runtime registrations and observed UI behavior need separate verification.
+
+The tracked requirement snapshot preserves 160 Git/GitHub requirements from the original 200, excludes RD40 and retains original acceptance, verification IDs, phases and planned status. Exact source decisions link relevant requirements and declared menu contexts. Reviewed relationships that need further evidence remain unmapped for follow-up in #13; unlinked requirements remain unverified. The scoped `p0MappingGate` remains `not-passed` while source relationships or labels are unresolved. This does not certify all P0 requirements, implement GitHub functionality or perform the IntelliJ comparison.
+
+Each invocation requires an absolute external evidence parent and creates a unique `component-inventory-*` directory through the shared evidence helper, containing an exclusive mode-0600 `catalog.json`. Existing sessions are preserved. `contentDigest` covers stable content while preserving ordered arrays; session timestamps and paths are excluded. stdout reports the path, digest, `collectionCompleteness`, `mappingCoverage`, `runtimeVerification` (always `not-assessed`) and scoped gate.
+
+Exit 0 means trustworthy complete enumeration, even when mapping coverage is incomplete. Exit 2 preserves partial extraction from verified bytes with explicit shape, identity, count or local-submenu diagnostics. Exit 1 means a mandatory input, immutable provenance, mapping contract, Git policy, argument or output failure; no trustworthy successful report is produced. Missing NLS tokens keep enumeration complete but block mapping. The CLI never installs, fetches or mutates Git configuration. Dedicated catalog tests above are required separately from the existing root `pnpm run test` suite.
