@@ -7,10 +7,10 @@ type Request = {
   nonce: string;
   stage: string;
   activation: string;
-  action: 'read' | 'write' | 'quit';
+  action: 'read' | 'write' | 'quit' | 'close';
   value?: string;
 };
-type Fixture = { nonce: string; channel: string; workspace: string };
+type Fixture = { nonce: string; channel: string; workspace: string | null; workspaces: string[] };
 
 export function activate(context: vscode.ExtensionContext): void {
   const fixture = JSON.parse(
@@ -29,6 +29,9 @@ export function activate(context: vscode.ExtensionContext): void {
     parentPid: process.ppid,
     appName: vscode.env.appName,
     started,
+    workspace: vscode.workspace.workspaceFolders?.[0]
+      ? realpathSync(vscode.workspace.workspaceFolders[0].uri.fsPath)
+      : null,
   };
   const publish = (name: string, value: object): void => {
     writeFileSync(join(fixture.channel, name), `${JSON.stringify(value, null, 2)}\n`, {
@@ -50,7 +53,11 @@ export function activate(context: vscode.ExtensionContext): void {
       await context.workspaceState.update('value', request.value);
     }
     const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!workspace || realpathSync(workspace) !== realpathSync(fixture.workspace))
+    if (
+      workspace
+        ? !fixture.workspaces.some((path) => realpathSync(path) === realpathSync(workspace))
+        : fixture.workspaces.length > 0
+    )
       throw new Error('Unexpected fixture workspace');
     publish(`result-${request.stage}.json`, {
       ...metadata,
@@ -58,17 +65,19 @@ export function activate(context: vscode.ExtensionContext): void {
       action: request.action,
       status: 'pass',
       observed: Date.now(),
-      workspace: realpathSync(workspace),
+      workspace: workspace ? realpathSync(workspace) : null,
       storageUri: context.storageUri?.fsPath,
       globalStorageUri: context.globalStorageUri.fsPath,
       setting: vscode.workspace.getConfiguration('devloomProfileFixture').get('value') ?? null,
       globalState: context.globalState.get('value') ?? null,
       workspaceState: context.workspaceState.get('value') ?? null,
     });
-    if (request.action === 'quit') {
+    if (request.action === 'quit' || request.action === 'close') {
       clearInterval(timer);
       setTimeout(() => {
-        void vscode.commands.executeCommand('workbench.action.quit');
+        void vscode.commands.executeCommand(
+          request.action === 'quit' ? 'workbench.action.quit' : 'workbench.action.closeWindow',
+        );
       }, 250);
     }
   };
@@ -85,7 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
       request.nonce !== fixture.nonce ||
       request.activation !== activation ||
       !/^[a-z0-9-]{1,64}$/.test(request.stage) ||
-      !['read', 'write', 'quit'].includes(request.action) ||
+      !['read', 'write', 'quit', 'close'].includes(request.action) ||
       processed.has(request.stage)
     )
       return;
