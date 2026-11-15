@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "esModuleInterop": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "skipLibCheck": true,
+    "types": ["node"],
+    "paths": {
+      "vscode": ["./vendor/code-oss/src/vscode-dts/vscode.d.ts"]
+    }
+  },
+  "include": [
+    "extensions/devloom-bootstrap/src/**/*.ts",
+    "tests/**/*.ts",
+    "product/localGit/**/*.ts"
+  ]
+}
