@@ -294,3 +294,70 @@ test('own ID hidden under an arbitrary directory remains an unknown collision', 
   );
   assert.ok(existsSync(join(path, 'package.json')));
 });
+
+test('active pre-mutation refusal releases only this attempt lock and inactive retry succeeds', async (t) => {
+  const f = fixture(t);
+  await ensureLocalExtension(f.root, f.profile, f.artifact(), { cli: f.cli, inactive: () => {} });
+  writeFileSync(join(f.root, 'payload/main.js'), 'module.exports = "retry B";');
+  const changed = f.artifact();
+  const previous = f.invocations.length;
+  await assert.rejects(
+    ensureLocalExtension(f.root, f.profile, changed, {
+      cli: f.cli,
+      inactive: () => {
+        throw new Error('Profile is active');
+      },
+    }),
+    /active/,
+  );
+  assert.equal(f.invocations.length, previous);
+  assert.equal(existsSync(join(f.profile.path, '.pending-devloom.fixture.json')), false);
+  assert.equal(existsSync(join(f.profile.path, '.local-install-lock')), false);
+  assert.equal(
+    (await ensureLocalExtension(f.root, f.profile, changed, { cli: f.cli, inactive: () => {} }))
+      .status,
+    'updated',
+  );
+});
+test('tampered owner record prevents pre-mutation lock cleanup', async (t) => {
+  const f = fixture(t);
+  const path = join(f.profile.path, '.local-install-lock/owner.json');
+  const changed = JSON.stringify({ owner: 'foreign-owner' });
+  await assert.rejects(
+    ensureLocalExtension(f.root, f.profile, f.artifact(), {
+      cli: () => assert.fail('native child before inactivity check'),
+      inactive: () => {
+        writeFileSync(path, changed);
+        throw new Error('Profile is active');
+      },
+    }),
+    /ownership changed/,
+  );
+  assert.equal(readFileSync(path, 'utf8'), changed);
+  assert.equal(existsSync(join(f.profile.path, '.pending-devloom.fixture.json')), false);
+});
+test('prior pending state and native-start failure retain lock and pending evidence', async (t) => {
+  const f = fixture(t);
+  const pending = join(f.profile.path, '.pending-devloom.fixture.json');
+  writeFileSync(pending, 'existing pending evidence');
+  await assert.rejects(
+    ensureLocalExtension(f.root, f.profile, f.artifact(), {
+      cli: () => assert.fail('prior pending reached child'),
+    }),
+    /Pending/,
+  );
+  assert.equal(readFileSync(pending, 'utf8'), 'existing pending evidence');
+  assert.equal(existsSync(join(f.profile.path, '.local-install-lock')), true);
+  const other = fixture(t);
+  await assert.rejects(
+    ensureLocalExtension(other.root, other.profile, other.artifact(), {
+      inactive: () => {},
+      cli: async () => {
+        throw new Error('native-start failure');
+      },
+    }),
+    /native-start/,
+  );
+  assert.equal(existsSync(join(other.profile.path, '.pending-devloom.fixture.json')), true);
+  assert.equal(existsSync(join(other.profile.path, '.local-install-lock')), true);
+});

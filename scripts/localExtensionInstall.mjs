@@ -259,15 +259,21 @@ export async function ensureLocalExtension(root, profile, artifact, options = {}
     throw error;
   }
   const owner = randomUUID();
-  writeFileSync(
-    join(lock, 'owner.json'),
-    JSON.stringify({ owner, root, profile: profile.id, artifact: artifact.digest }),
-    { flag: 'wx', mode: 0o600 },
-  );
+  const lockIdentity = lstatSync(lock);
+  const ownerRecord = JSON.stringify({
+    owner,
+    root,
+    profile: profile.id,
+    artifact: artifact.digest,
+  });
+  writeFileSync(join(lock, 'owner.json'), ownerRecord, { flag: 'wx', mode: 0o600 });
   const receiptPath = join(profile.path, `.receipt-${artifact.id}.json`);
-  const pending = join(profile.path, `.pending-${artifact.id}.json`);
+  const pendingName = `.pending-${artifact.id}.json`;
+  const pending = join(profile.path, pendingName);
   const log = join(artifact.stage, `native-${randomUUID()}.json`);
   let complete = false;
+  let mutationStarted = false;
+  let pendingObserved = false;
   const calls = [];
   const cli = options.cli ?? nativeCLI;
   const common = developmentArguments(root, profile).filter(
@@ -304,8 +310,10 @@ export async function ensureLocalExtension(root, profile, artifact, options = {}
     }
   };
   try {
-    if (existsSync(pending))
+    if (readdirSync(profile.path).includes(pendingName)) {
+      pendingObserved = true;
       throw new Error('Pending native installation requires manual inspection');
+    }
     const receipt = existsSync(receiptPath) ? JSON.parse(boundedRead(receiptPath)) : undefined;
     if (
       receipt &&
@@ -379,6 +387,7 @@ export async function ensureLocalExtension(root, profile, artifact, options = {}
       }
     }
     (options.inactive ?? assertInactive)(profile);
+    mutationStarted = true;
     writeFileSync(
       pending,
       JSON.stringify({
@@ -455,10 +464,21 @@ export async function ensureLocalExtension(root, profile, artifact, options = {}
     complete = true;
     return { status: receipt ? 'updated' : 'installed', receipt: receiptValue, calls, log };
   } finally {
-    writeFileSync(log, JSON.stringify({ owner, complete, calls }), { flag: 'wx', mode: 0o600 });
-    if (complete) {
-      safeNode(lock, true);
-      if (JSON.parse(boundedRead(join(lock, 'owner.json'))).owner !== owner)
+    writeFileSync(
+      log,
+      JSON.stringify({ owner, complete, mutationStarted, pendingObserved, calls }),
+      { flag: 'wx', mode: 0o600 },
+    );
+    if (
+      complete ||
+      (!mutationStarted && !pendingObserved && !readdirSync(profile.path).includes(pendingName))
+    ) {
+      const currentLock = safeNode(lock, true);
+      if (
+        currentLock.dev !== lockIdentity.dev ||
+        currentLock.ino !== lockIdentity.ino ||
+        boundedRead(join(lock, 'owner.json')).toString() !== ownerRecord
+      )
         throw new Error('Install lock ownership changed');
       rmSync(lock, { recursive: true });
     }

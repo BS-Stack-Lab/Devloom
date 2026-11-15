@@ -421,11 +421,22 @@ try {
     /active|process remains/,
   );
   assert.equal(host.closed, false);
+  assert.equal(existsSync(join(session.profile.path, '.local-install-lock')), false);
+  assert.equal(
+    existsSync(join(session.profile.path, '.pending-devloom.devloom-bootstrap.json')),
+    false,
+  );
+  const refusalLog = readdirSync(changed.stage).filter((name) => name.startsWith('native-'));
+  assert.equal(refusalLog.length, 1);
+  assert.deepEqual(JSON.parse(readFileSync(join(changed.stage, refusalLog[0]), 'utf8')).calls, []);
   result.completed.push(
     'native-disabled-preference-preserved-no-autoenable',
     'changed-live-owned-payload-refused-main-survives',
   );
   await session.quit(host);
+  const inactiveRetry = await ensureLocalExtension(root, session.profile, changed);
+  assert.equal(inactiveRetry.status, 'updated');
+  write(join(session.evidence, 'changed-live-inactive-retry.json'), inactiveRetry);
   result.status = 'pass';
 } catch (error) {
   result.error = error.stack ?? String(error);
