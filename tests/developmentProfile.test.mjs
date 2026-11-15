@@ -139,7 +139,13 @@ test('exclusive first creation initializes fixed private roots and launch policy
   const args = developmentArguments(root, profile, root);
   assert.ok(args.includes(`--user-data-dir=${profile.userData}`));
   assert.ok(args.includes(`--extensions-dir=${profile.extensions}`));
-  assert.ok(args.includes('--new-window'));
+  assert.ok(
+    !args.some((arg) =>
+      /--(new-window|reuse-window|extensionDevelopmentPath|extensionTestsPath|inspect|remote-debugging)/.test(
+        arg,
+      ),
+    ),
+  );
   assert.ok(args.includes('--disable-telemetry'));
   assert.equal(args.filter((value) => value.startsWith('--disable-extension=')).length, 4);
   assert.equal(args.at(-1), root);

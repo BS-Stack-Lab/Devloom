@@ -19,7 +19,7 @@ export const initialSettings = {
   'telemetry.telemetryLevel': 'off',
   'update.mode': 'none',
   'extensions.autoCheckUpdates': false,
-  'extensions.autoUpdate': false,
+  'extensions.autoUpdate': 'off',
   'chat.disableAIFeatures': true,
 };
 
@@ -177,12 +177,10 @@ export function developmentProfile(repository, id) {
   return { ...location, id, created, settings, marker };
 }
 
-export function developmentArguments(repository, profile, workspace) {
+export function developmentArguments(_repository, profile, workspace) {
   return [
-    `--extensionDevelopmentPath=${resolve(repository, 'extensions/devloom-bootstrap')}`,
     `--user-data-dir=${profile.userData}`,
     `--extensions-dir=${profile.extensions}`,
-    '--new-window',
     '--disable-telemetry',
     '--disable-updates',
     ...[

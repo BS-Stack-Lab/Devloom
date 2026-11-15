@@ -1,20 +1,18 @@
 import * as vscode from 'vscode';
-import { join } from 'node:path';
+import { resolveApplicationHelper } from './appRoot';
 import { registerLocalGit } from './localGit';
 import { BridgeClient } from './bridgeClient';
 let bridge: BridgeClient | undefined;
 export function activate(context: vscode.ExtensionContext) {
   registerLocalGit(context);
   bridge = new BridgeClient(
-    join(
+    resolveApplicationHelper(
       context.extensionPath,
-      '..',
-      '..',
-      'crates',
-      'devloom-sidecar',
-      'target',
-      'debug',
-      process.platform === 'win32' ? 'devloom-sidecar.exe' : 'devloom-sidecar',
+      context.extensionMode === vscode.ExtensionMode.Production
+        ? 'production'
+        : context.extensionMode === vscode.ExtensionMode.Test
+          ? 'test'
+          : 'development',
     ),
   );
   const client = bridge;

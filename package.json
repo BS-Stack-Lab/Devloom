@@ -9,7 +9,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "build": "node scripts/devloom.mjs build",
-    "test": "node --test dist/tests/framing.test.js dist/tests/bridge.test.js dist/tests/launcher.test.js dist/tests/mutationBroker.test.js dist/tests/patchUpstream.test.js dist/tests/commandPolicy.test.js tests/componentInventory*.test.mjs tests/developmentProfile.test.mjs",
+    "test": "node --test dist/tests/framing.test.js dist/tests/bridge.test.js dist/tests/launcher.test.js dist/tests/mutationBroker.test.js dist/tests/patchUpstream.test.js dist/tests/commandPolicy.test.js tests/componentInventory*.test.mjs tests/developmentProfile.test.mjs tests/commitStateRunner.test.mjs tests/localExtensionInstall.test.mjs dist/tests/appRoot.test.js",
     "test:profiles": "node scripts/runDevelopmentProfiles.mjs",
     "test:extension": "node scripts/runExtensionHost.mjs",
     "upstream:build": "node scripts/upstream.mjs build",
@@ -17,7 +17,9 @@
     "start": "node scripts/devloom.mjs start",
     "test:localGit": "node scripts/runLocalGit.mjs",
     "inventory:components": "node scripts/componentInventory.mjs",
-    "test:components": "node --test tests/componentInventory*.test.mjs"
+    "test:components": "node --test tests/componentInventory*.test.mjs",
+    "test:commitState": "node scripts/runCommitState.mjs",
+    "test:normalInstall": "node scripts/runNormalInstallation.mjs"
   },
   "devDependencies": {
     "typescript": "npm:@typescript/typescript6@6.0.2",

@@ -24,6 +24,9 @@ else if (command === 'build') {
     developmentLocation(root, selection.id);
     prepare();
     const profile = developmentProfile(root, selection.id);
+    const { buildLocalArtifact } = await import('./localExtensionArtifact.mjs');
+    const { ensureLocalExtension, localEnvironment } = await import('./localExtensionInstall.mjs');
+    const installation = await ensureLocalExtension(root, profile, buildLocalArtifact(root));
     process.stdout.write(
       `${JSON.stringify({
         developmentProfile: profile.id,
@@ -31,14 +34,15 @@ else if (command === 'build') {
         userData: profile.userData,
         extensions: profile.extensions,
         notice:
-          'Same-profile launch may reload its development window; unsaved content and editor restoration are unverified (#9).',
+          'Ordinary Workbench; owned offline extension installation verified. Native restore/focus preferences apply.',
+        installation: installation.status,
       })}\n`,
     );
     await run(
       resolve(upstream, 'scripts/code.sh'),
       developmentArguments(root, profile, selection.workspace),
       upstream,
-      { ...process.env, VSCODE_DEV: '1', VSCODE_SKIP_PRELAUNCH: '1' },
+      localEnvironment(root),
     );
   } catch (error) {
     process.stderr.write(`Development start failed: ${String(error.message).slice(0, 400)}\n`);
