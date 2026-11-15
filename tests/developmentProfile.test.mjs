@@ -32,23 +32,50 @@ function fixture(t) {
   t.after(() => rmSync(path, { recursive: true, force: true }));
   return path;
 }
-function child(source) {
+function child(source, timeout = 10000) {
   return new Promise((done, reject) => {
     const instance = spawn(process.execPath, ['--input-type=module', '-e', source], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
     let stderr = '';
+    let failure;
+    const timer = setTimeout(() => {
+      failure = new Error(`Fixture child timed out after ${timeout}ms`);
+      instance.kill('SIGKILL');
+    }, timeout);
     instance.stdout.on('data', (data) => {
       stdout += data;
     });
     instance.stderr.on('data', (data) => {
       stderr += data;
     });
-    instance.once('error', reject);
-    instance.once('close', (code) => done({ code, stdout, stderr }));
+    instance.once('error', (error) => {
+      failure = error;
+    });
+    instance.once('close', (code, signal) => {
+      clearTimeout(timer);
+      if (failure) {
+        reject(Object.assign(failure, { pid: instance.pid, code, signal, stdout, stderr }));
+      } else done({ code, stdout, stderr });
+    });
   });
 }
+
+test('hung fixture child is killed and reaped before timeout rejection', async () => {
+  await assert.rejects(
+    child("process.stdout.write('ready'); setInterval(() => {}, 1000);", 500),
+    (error) => {
+      assert.match(error.message, /timed out after 500ms/);
+      assert.equal(error.stdout, 'ready');
+      assert.equal(error.signal, 'SIGKILL');
+      assert.equal(error.code, null);
+      assert.ok(Number.isSafeInteger(error.pid) && error.pid > 1);
+      assert.throws(() => process.kill(error.pid, 0), { code: 'ESRCH' });
+      return true;
+    },
+  );
+});
 
 test('selection has exact CLI, environment and default precedence', (t) => {
   const workspace = fixture(t);
