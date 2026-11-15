@@ -25,7 +25,17 @@
       {
         "command": "devloom.stopLocalBridge",
         "title": "Devloom: Stop Local Bridge"
+      },
+      {
+        "command": "devloom.diagnoseLocalGit",
+        "title": "Devloom: Diagnose Local Git"
       }
     ]
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Local Git diagnostics report trust without running repository Git."
+    }
   }
 }

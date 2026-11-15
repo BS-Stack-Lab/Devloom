@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "commit": "69047191fc427f2f92828279aae1d90d8eeda7ab",
+  "patches": [
+    {
+      "path": "patches/localGit/main-broker.patch",
+      "sha256": "90a13d73a205fb767afe26fe037bbbd7a699afbe35bd15769bf6328269bef07b"
+    },
+    {
+      "path": "patches/localGit/native-git.patch",
+      "sha256": "14ec7c0f54d477aa7e22672168c34abc4426a5865ccc5f194b07f4e6f838e3a3"
+    }
+  ],
+  "files": [
+    {
+      "path": "extensions/git/src/api/api1.ts",
+      "before": "cd4f361cbec8a2d85f7a642f27173f8fe715ef6f9aaf184c6675c9b1a89e69ca",
+      "after": "364bc9e9a8cb50bde3df873d8ad9ad1e9e1058ec5f6021b04665f1c427e2b3d2"
+    },
+    {
+      "path": "extensions/git/src/cloneManager.ts",
+      "before": "84dde090a009f94e059d5a3117f67abaf5ca7fb38345636a8f8a162cbb1fd970",
+      "after": "91ffc99d54431df003bcf848ed19f3c6b21509c92ac28a0d5f7dc2b500f09f06"
+    },
+    {
+      "path": "extensions/git/src/commands.ts",
+      "before": "ae5257e0d6bd86a6f8bae6753836adb6e65515e76455e36ce2bdde8a0fa108e3",
+      "after": "03bfe88c6c1356996e24a3cc7e8a51cb1560b7ad5a5f37a8401f0cf9421a681c"
+    },
+    {
+      "path": "extensions/git/src/git.ts",
+      "before": "02ce6152d3be6249912d34c04e0b55b9d8d9eb1c97f9146d8117503c85f271bd",
+      "after": "8bac1ff7a2ce2b3f5ea42de2ce8c74e9180d1649e7fa1b4e7a7fe12959ce3838"
+    },
+    {
+      "path": "extensions/git/src/repository.ts",
+      "before": "669b9f38a5a7d0262e81d8cc4cf89b209ec2ae62a461d47d60f2633ad1ff9bec",
+      "after": "980810bfe064758065e7695d0bc021eec18815979fe2cf93ce3d6a10d78c521c"
+    },
+    {
+      "path": "extensions/git/src/staging.ts",
+      "before": "905f2db0fedcefdbff04e7503c4ed52555dd5bea615466d815783c21c805b679",
+      "after": "af7316352bb1cc667306fa379ac3cd92009c4644e0358902cf750060a42f1a63"
+    },
+    {
+      "path": "src/vs/code/electron-main/app.ts",
+      "before": "7197583f38f615473d4cbcc091077fa493a45a72a8eed45fe013c3c64e06e9be",
+      "after": "aa88f33cf87661973d2dc76edbcb107421d5e5176eea52a72a6b5ce5ecda556f"
+    },
+    {
+      "path": "src/vs/editor/browser/widget/diffEditor/features/gutterFeature.ts",
+      "before": "23ce6ba202b72c706491f4e43d1aca3362cf38e4871bd7a3803b42ec7ed2cf94",
+      "after": "4b50611aeb250623c6e96765f2594a2b93f0e4cd06e1bf774a57f618cfd0f9f4"
+    }
+  ]
+}

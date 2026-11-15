@@ -9,11 +9,12 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "build": "node scripts/devloom.mjs build",
-    "test": "node --test dist/tests/framing.test.js dist/tests/bridge.test.js dist/tests/launcher.test.js",
+    "test": "node --test dist/tests/framing.test.js dist/tests/bridge.test.js dist/tests/launcher.test.js dist/tests/mutationBroker.test.js dist/tests/patchUpstream.test.js dist/tests/commandPolicy.test.js",
     "test:extension": "node scripts/runExtensionHost.mjs",
     "upstream:build": "node scripts/upstream.mjs build",
     "prepare:local": "node scripts/devloom.mjs prepare",
-    "start": "node scripts/devloom.mjs start"
+    "start": "node scripts/devloom.mjs start",
+    "test:localGit": "node scripts/runLocalGit.mjs"
   },
   "devDependencies": {
     "typescript": "npm:@typescript/typescript6@6.0.2",

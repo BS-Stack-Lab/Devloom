@@ -9,7 +9,7 @@ import {
   createWriteStream,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve, join } from 'node:path';
+import { resolve, join, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepare, root, upstream } from './upstream.mjs';
 export function createEvidenceDirectory(parent) {
@@ -23,10 +23,17 @@ async function main() {
     !existsSync(resolve(upstream, '.build/electron'))
   )
     throw new Error('Build upstream and prepare Electron before host smoke');
-  const evidence = createEvidenceDirectory(
-    resolve(process.env.DEVLOOM_EVIDENCE_DIR || join(root, '.local-evidence/extension-host')),
-  );
+  const parent = process.env.DEVLOOM_EVIDENCE_DIR;
+  if (
+    !parent ||
+    !isAbsolute(parent) ||
+    resolve(parent) === root ||
+    resolve(parent).startsWith(root + '/')
+  )
+    throw new Error('Set an absolute external DEVLOOM_EVIDENCE_DIR');
+  const evidence = createEvidenceDirectory(parent);
   const temporary = mkdtempSync(join(tmpdir(), 'devloom-host-'));
+  const gitRuntime = mkdtempSync('/tmp/dlg-p0-');
   const workspace = join(temporary, 'workspace');
   const userData = join(temporary, 'profile');
   const extensions = join(temporary, 'extensions');
@@ -84,6 +91,7 @@ async function main() {
         VSCODE_DEV: '1',
         VSCODE_SKIP_PRELAUNCH: '1',
         DEVLOOM_EVIDENCE_DIR: evidence,
+        DEVLOOM_GIT_TEST_DIRECTORY: gitRuntime,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -128,6 +136,7 @@ async function main() {
     }
     raw.end();
     rmSync(temporary, { recursive: true, force: true });
+    rmSync(gitRuntime, { recursive: true, force: true });
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
