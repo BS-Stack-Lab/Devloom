@@ -8,13 +8,11 @@ export const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 export const upstream = resolve(root, 'vendor/code-oss');
 const PIN = '69047191fc427f2f92828279aae1d90d8eeda7ab';
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
-export function check() {
-  auditPatches(root, upstream, true);
+export function check(options = {}) {
+  const git = options.runGit ?? ((args) => execFileSync('git', args, { cwd: upstream }));
+  auditPatches(root, upstream, !options.readOnly, options);
   const lock = readJson(resolve(root, 'upstream.lock.json'));
-  const head = execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: upstream,
-    encoding: 'utf8',
-  }).trim();
+  const head = git(['rev-parse', 'HEAD']).toString().trim();
   const manifest = readJson(resolve(upstream, 'package.json'));
   if (
     head !== PIN ||
@@ -31,6 +29,10 @@ export function check() {
     'README.md',
     '.github/copilot-instructions.md',
   ]) {
+    if (options.readOnly) {
+      options.runGit.verifyIdentity(path);
+      continue;
+    }
     const actual = execFileSync('git', ['hash-object', `--path=${path}`, path], {
       cwd: upstream,
       encoding: 'utf8',

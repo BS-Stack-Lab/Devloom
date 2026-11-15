@@ -5,16 +5,36 @@ import { resolve } from 'node:path';
 export function hash(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
-export function auditPatches(root, upstream, apply = false) {
+export function auditPatches(root, upstream, apply = false, options = {}) {
   const manifest = JSON.parse(
     readFileSync(resolve(root, 'patches/localGit/manifest.json'), 'utf8'),
   );
-  const git = (args) => execFileSync('git', args, { cwd: upstream });
+  const git = options.runGit ?? ((args) => execFileSync('git', args, { cwd: upstream }));
   if (git(['rev-parse', 'HEAD']).toString().trim() !== manifest.commit)
     throw new Error('Patch upstream pin mismatch');
   const paths = new Set(manifest.files.map((file) => file.path));
-  const changed = git(['diff', '--name-only', '-z', 'HEAD']).toString().split('\0').filter(Boolean);
-  const untracked = git(['ls-files', '--others', '--exclude-standard', '-z'])
+  const changed = git(
+    options.runGit
+      ? [
+          'diff',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--ignore-submodules=all',
+          '--name-only',
+          '-z',
+          'HEAD',
+          '--',
+        ]
+      : ['diff', '--name-only', '-z', 'HEAD'],
+  )
+    .toString()
+    .split('\0')
+    .filter(Boolean);
+  const untracked = git(
+    options.runGit
+      ? ['ls-files', '--others', '--exclude-standard', '-z', '--']
+      : ['ls-files', '--others', '--exclude-standard', '-z'],
+  )
     .toString()
     .split('\0')
     .filter(Boolean);
