@@ -82,3 +82,20 @@ Tracked patches under `patches/localGit` target the immutable upstream SHA. Prep
 Authenticated HTTPS/SSH servers, advanced draft persistence/unsaved-buffer flows, other operating systems, packaging and automatic manual-recovery tooling remain outside this implementation.
 
 For independent QA, set `DEVLOOM_LOCAL_GIT_SCENARIOS` to a comma-separated subset of `normal`, `concurrency`, `linked-worktree`, `untrusted`, `missing-git`, `unsupported-git`, `worker-crash`, `main-crash`. Unknown, empty and duplicate names are refused. The default remains all eight scenarios; `run-result.json` records the exact selected/completed groups and identifies subset runs, which do not replace the full mandatory suite.
+
+## Component inventory
+
+```sh
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence pnpm run inventory:components
+pnpm run test:components
+```
+
+The inventory currently requires Git 2.53.0 at `/opt/homebrew/bin/git`. Other executable locations and versions are unsupported by this inventory command; the local Git runtime write minimum of Git 2.28 above is a separate requirement. No global Git configuration changes are needed. Support for other installed Git locations can be added through a future tool discovery improvement.
+
+The inventory verifies the fixed source and applied patches without applying patches or changing Git configuration. It scans component manifests, license/notice evidence, installed root and upstream packages (including declared workspaces and extension dependencies), downloaded extension declarations, specified native artifacts, local Electron bytes and own Rust dependencies using offline locked Cargo metadata. It does not attest every source file. Archive checksums, original source hashes and actual local file hashes are separate evidence. Native files are hashed without execution; runtime loading, distribution and build provenance remain unknown where unobserved.
+
+Every invocation requires an absolute evidence parent outside this repository, rejects repository aliases, and creates a unique `component-inventory-*` session with an exclusive `inventory.json`. The report contains stable sorted content and its SHA256 `contentDigest`; session time and output paths do not affect that digest. Repeated scans with unchanged inputs produce matching content. stdout names the report, digest and three independent states: `scanCompleteness` (`complete` or `incomplete`), `licenseCoverage` (`complete`, `partial` or `unknown`) and `legalApproval` (always `not-assessed`). Missing license evidence is recorded without assuming MIT or granting redistribution rights.
+
+Exit 0 means collection completed, including when license coverage is partial. Exit 2 preserves a report with incomplete collection, such as missing required inputs, invalid component manifests, offline cache failures or bounds reached. Exit 1 means an argument/output, source pin/integrity, patch or Git policy failure prevented a trustworthy inventory. No exit code grants legal approval. Restore required local inputs or inspect safe diagnostic codes before retrying; the command never installs dependencies or fetches objects.
+
+Scanning is bounded to 500000 directory entries, depth 32, 8 MiB manifests, 64 MiB license files, 1 GiB binary files, 8 GiB total hashed bytes and 32 MiB/30 seconds per metadata subprocess. Symlink resolution is limited to explicit component roots; unsafe links and unsupported metadata are reported. Known fixed identity text may compare CRLF worktree bytes against LF source bytes using a built-in comparison; reported hashes always retain the original raw bytes. These checks do not provide an OS sandbox against concurrent filesystem replacement, a complete binary dependency graph, a distribution BOM or legal approval. Current execution validation covers macOS arm64 only.
