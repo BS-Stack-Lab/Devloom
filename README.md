@@ -164,3 +164,32 @@ Build own TypeScript before dist consumers and compile the pinned native applica
 The read-only report preserves all 28 original P1 rows and their 87 conjunctive clauses, including original `planned` status. Set `DEVLOOM_P1_EVIDENCE_INDEX` to an external coordinator or QA index for source-bound producer evidence admission. No index produces an explicit unverified inventory. Malformed, stale, foreign or unsafe evidence fails the report command. Exit zero means report generation succeeded; it does not certify whole P1 acceptance. Native API, rendered observations, physical interaction, fixture CLI, static and historical evidence remain distinct. Missing physical controls, account features, selected remote/ref interaction, history navigation and visible baseline timestamps remain explicit gaps unless independently observed and admitted.
 
 Launcher regression tests use real owned Node children, marker/OS process identity checks and an independent sentinel. Injected probe failures validate harness safety; they do not certify native application startup. Ambiguous ownership preserves exact fixture/profile leftovers without signaling or adopting them. Process snapshots and nonce markers are best-effort local ownership checks, not atomic process handles or an OS sandbox against same-user races.
+
+## Offline RPC baseline
+
+Use the pinned macOS arm64 Node 24.22.1, pnpm 12.16.0, Rust 1.100.0 and Git 2.53.0 at `/opt/homebrew/bin/git`. Configure the project-local PATH, CARGO_HOME and RUSTUP_HOME as described above. Existing root/upstream dependencies and Rust caches are required; the runner never builds, installs, fetches or applies patches. Build the current own TypeScript and fixed debug helper first:
+
+```sh
+pnpm run build
+cargo build --manifest-path crates/devloom-sidecar/Cargo.toml --locked --offline
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence node --test tests/rpcBenchmark.test.mjs
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence node scripts/runRpcBenchmark.mjs
+```
+
+The runner accepts no arguments or executable overrides. It verifies the source with the inventory's read-only Git policy. The measured experiment has a 60 second deadline; preflight commands have separate bounds and every owned helper is stopped in finally. Only its fixed debug helper is executed.
+
+Five repetitions alternate mode order, with a fresh helper per repetition. Empty, fixed Unicode, 1024 byte ASCII and 8192 byte ASCII inputs use identical sequences in both modes at concurrency 1 and 16. Each cell excludes 20 warmups and records 100 measured operations: 8000 measured requests and 1600 warmups total. Sequential batches include final partial batches and never exceed 16 outstanding requests.
+
+`ts-only-in-process` is a small asynchronous Node JavaScript echo using the existing compiled TypeScript validators. `rust-stdio` includes the actual bridge, serialization, framing, pipes, scheduling and debug helper. This measures architectural boundary cost, with common result validation/equality checking inside both latency intervals. It is not an isolated language-speed comparison and reports no Rust speedup.
+
+Each cell retains individual raw request latency, wall duration and completed-count/wall throughput. Nearest-rank p50/p95/max summaries group only the same mode, input and concurrency. Zero wall duration makes throughput unavailable. Warmups never enter distributions. There is no performance pass/fail threshold; five local repetitions do not establish statistical significance. V8/JIT/GC, shared runner history, machine load and OS caches remain uncontrolled; fresh process startup does not mean cold OS caches.
+
+Actual helper start/hello, restart/generation, timeout settlement and stop/reap observations accompany pending cleanup checks. Cancellation measures abort-to-local-promise settlement after a separately recorded dispatch-to-abort delay; remote acknowledgement/completion is unavailable. A following echo proves responsiveness only. The client lifetime envelope is not exact OS CPU lifetime. TS startup/restart/lifetime are not applicable.
+
+Boundary RSS samples retain process, phase, units and method. Node RSS includes the shared runner and retained raw samples; helper RSS uses the current owned pid and macOS `/bin/ps` 1024-byte units. Missing/replaced/probe-failed helper samples are unavailable and set `memoryCoverage` to `incomplete`, independently of functional outcome. These are neither peaks nor isolated per-mode allocations, process-tree totals or whole-IDE memory.
+
+Every invocation creates a unique external `component-inventory-*` session through the shared evidence helper. Exclusive mode-0600 `raw.jsonl` and `benchmark.json` preserve prior sessions and partial failures. The report identifies ordered input/config digests, source/tool versions, required source/compiled hashes and debug executable bytes before/after execution. `observed-local-bytes` is not reproducible-build attestation; debug-path compiler/profile overrides remain unobserved unless separate current build logs establish them.
+
+Exit 0 means all functional measurements, owned cleanup and required provenance checks succeeded. Exit 1 preserves a failed report after safe session allocation, or prints a safe error code if allocation was refused. Interrupted runs may have only partial raw evidence and never imply success. stdout names the exact report path, outcome and configuration digest. Read both outcome and memory coverage before interpreting a report.
+
+This Node-only baseline measures no renderer, extension host, Electron UI blocking, GitHub latency or native UI. It makes no packaging, cross-platform or overall P0 completion claim. Synthetic failure tests are labeled separately and do not replace full actual helper runs.
