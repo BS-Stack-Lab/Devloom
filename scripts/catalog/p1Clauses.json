@@ -1,0 +1,529 @@
+{
+  "schemaVersion": 1,
+  "requirementsSha256": "956ba53ea82b86be0ac41c4d5c9e7699e7f6fe03f990efae7135fab6ac540448",
+  "canonicalSha256": "9e20992c98aa9b66a0b3b9dd4a4ab8c314e3dac47d5d41e2343f862956ffd27c",
+  "clauses": [
+    {
+      "id": "REP-01.1",
+      "requirementId": "REP-01",
+      "acceptance": "Git 미설치·지원 미달이면 원인과 설치 경로를 표시하고 쓰기를 시작하지 않음",
+      "text": "missing Git cause and installation path visible"
+    },
+    {
+      "id": "REP-01.2",
+      "requirementId": "REP-01",
+      "acceptance": "Git 미설치·지원 미달이면 원인과 설치 경로를 표시하고 쓰기를 시작하지 않음",
+      "text": "unsupported Git cause and installation path visible"
+    },
+    {
+      "id": "REP-01.3",
+      "requirementId": "REP-01",
+      "acceptance": "Git 미설치·지원 미달이면 원인과 설치 경로를 표시하고 쓰기를 시작하지 않음",
+      "text": "no writes for either failure"
+    },
+    {
+      "id": "REP-02.1",
+      "requirementId": "REP-02",
+      "acceptance": "빈 폴더 init 후 첫 커밋 및 기존 저장소 자동 인식 성공",
+      "text": "initialize empty folder"
+    },
+    {
+      "id": "REP-02.2",
+      "requirementId": "REP-02",
+      "acceptance": "빈 폴더 init 후 첫 커밋 및 기존 저장소 자동 인식 성공",
+      "text": "first commit in initialized folder"
+    },
+    {
+      "id": "REP-02.3",
+      "requirementId": "REP-02",
+      "acceptance": "빈 폴더 init 후 첫 커밋 및 기존 저장소 자동 인식 성공",
+      "text": "existing repository auto-detected"
+    },
+    {
+      "id": "REP-03.1",
+      "requirementId": "REP-03",
+      "acceptance": "HTTPS·SSH clone과 취소 뒤 불완전 대상 폴더의 명시적 정리 가능",
+      "text": "HTTPS clone"
+    },
+    {
+      "id": "REP-03.2",
+      "requirementId": "REP-03",
+      "acceptance": "HTTPS·SSH clone과 취소 뒤 불완전 대상 폴더의 명시적 정리 가능",
+      "text": "SSH clone"
+    },
+    {
+      "id": "REP-03.3",
+      "requirementId": "REP-03",
+      "acceptance": "HTTPS·SSH clone과 취소 뒤 불완전 대상 폴더의 명시적 정리 가능",
+      "text": "cancellation retains known actual outcome"
+    },
+    {
+      "id": "REP-03.4",
+      "requirementId": "REP-03",
+      "acceptance": "HTTPS·SSH clone과 취소 뒤 불완전 대상 폴더의 명시적 정리 가능",
+      "text": "explicit incomplete target cleanup available"
+    },
+    {
+      "id": "REP-13.1",
+      "requirementId": "REP-13",
+      "acceptance": "Git author와 GitHub 로그인 계정을 구별하고 repo 설정을 global로 덮어쓰지 않음",
+      "text": "Git author distinguished from GitHub account"
+    },
+    {
+      "id": "REP-13.2",
+      "requirementId": "REP-13",
+      "acceptance": "Git author와 GitHub 로그인 계정을 구별하고 repo 설정을 global로 덮어쓰지 않음",
+      "text": "repository identity never overwrites global config"
+    },
+    {
+      "id": "REP-14.1",
+      "requirementId": "REP-14",
+      "acceptance": "터미널 커밋·checkout 후 재열기 없이 HEAD·index·diff 갱신",
+      "text": "external terminal commit refreshes HEAD without reopen"
+    },
+    {
+      "id": "REP-14.2",
+      "requirementId": "REP-14",
+      "acceptance": "터미널 커밋·checkout 후 재열기 없이 HEAD·index·diff 갱신",
+      "text": "external checkout refreshes index and diff without reopen"
+    },
+    {
+      "id": "REP-15.1",
+      "requirementId": "REP-15",
+      "acceptance": "실패 코드·작업·복구 행동을 표시하고 URL 자격증명을 마스킹",
+      "text": "failure code and operation visible"
+    },
+    {
+      "id": "REP-15.2",
+      "requirementId": "REP-15",
+      "acceptance": "실패 코드·작업·복구 행동을 표시하고 URL 자격증명을 마스킹",
+      "text": "recovery action visible"
+    },
+    {
+      "id": "REP-15.3",
+      "requirementId": "REP-15",
+      "acceptance": "실패 코드·작업·복구 행동을 표시하고 URL 자격증명을 마스킹",
+      "text": "credential-bearing URLs masked"
+    },
+    {
+      "id": "CHG-01.1",
+      "requirementId": "CHG-01",
+      "acceptance": "추가·수정·삭제·rename·untracked·conflict를 혼동 없이 표시",
+      "text": "added distinct"
+    },
+    {
+      "id": "CHG-01.2",
+      "requirementId": "CHG-01",
+      "acceptance": "추가·수정·삭제·rename·untracked·conflict를 혼동 없이 표시",
+      "text": "modified distinct"
+    },
+    {
+      "id": "CHG-01.3",
+      "requirementId": "CHG-01",
+      "acceptance": "추가·수정·삭제·rename·untracked·conflict를 혼동 없이 표시",
+      "text": "deleted distinct"
+    },
+    {
+      "id": "CHG-01.4",
+      "requirementId": "CHG-01",
+      "acceptance": "추가·수정·삭제·rename·untracked·conflict를 혼동 없이 표시",
+      "text": "renamed distinct"
+    },
+    {
+      "id": "CHG-01.5",
+      "requirementId": "CHG-01",
+      "acceptance": "추가·수정·삭제·rename·untracked·conflict를 혼동 없이 표시",
+      "text": "untracked distinct"
+    },
+    {
+      "id": "CHG-01.6",
+      "requirementId": "CHG-01",
+      "acceptance": "추가·수정·삭제·rename·untracked·conflict를 혼동 없이 표시",
+      "text": "conflict distinct"
+    },
+    {
+      "id": "CHG-02.1",
+      "requirementId": "CHG-02",
+      "acceptance": "같은 파일을 stage 후 재수정하면 두 diff가 서로 다른 내용으로 표시",
+      "text": "same file staged then modified again"
+    },
+    {
+      "id": "CHG-02.2",
+      "requirementId": "CHG-02",
+      "acceptance": "같은 파일을 stage 후 재수정하면 두 diff가 서로 다른 내용으로 표시",
+      "text": "HEAD to index rendered correct"
+    },
+    {
+      "id": "CHG-02.3",
+      "requirementId": "CHG-02",
+      "acceptance": "같은 파일을 stage 후 재수정하면 두 diff가 서로 다른 내용으로 표시",
+      "text": "index to working rendered different correct content"
+    },
+    {
+      "id": "CHG-03.1",
+      "requirementId": "CHG-03",
+      "acceptance": "동일 변경의 양쪽 보기 전환과 공백 숨기기가 원본을 바꾸지 않음",
+      "text": "same diff side-by-side and inline rendering"
+    },
+    {
+      "id": "CHG-03.2",
+      "requirementId": "CHG-03",
+      "acceptance": "동일 변경의 양쪽 보기 전환과 공백 숨기기가 원본을 바꾸지 않음",
+      "text": "whitespace hiding affects rendering"
+    },
+    {
+      "id": "CHG-03.3",
+      "requirementId": "CHG-03",
+      "acceptance": "동일 변경의 양쪽 보기 전환과 공백 숨기기가 원본을 바꾸지 않음",
+      "text": "HEAD index disk buffer preserved"
+    },
+    {
+      "id": "CHG-04.1",
+      "requirementId": "CHG-04",
+      "acceptance": "선택 범위만 index에 반영되고 unstage가 working 파일을 보존",
+      "text": "file scope stage"
+    },
+    {
+      "id": "CHG-04.2",
+      "requirementId": "CHG-04",
+      "acceptance": "선택 범위만 index에 반영되고 unstage가 working 파일을 보존",
+      "text": "folder scope stage including nested files"
+    },
+    {
+      "id": "CHG-04.3",
+      "requirementId": "CHG-04",
+      "acceptance": "선택 범위만 index에 반영되고 unstage가 working 파일을 보존",
+      "text": "whole repository stage"
+    },
+    {
+      "id": "CHG-04.4",
+      "requirementId": "CHG-04",
+      "acceptance": "선택 범위만 index에 반영되고 unstage가 working 파일을 보존",
+      "text": "only selected scope enters index"
+    },
+    {
+      "id": "CHG-04.5",
+      "requirementId": "CHG-04",
+      "acceptance": "선택 범위만 index에 반영되고 unstage가 working 파일을 보존",
+      "text": "unstage preserves working bytes"
+    },
+    {
+      "id": "CHG-05.1",
+      "requirementId": "CHG-05",
+      "acceptance": "두 hunk 중 하나만 커밋하면 다른 변경은 working tree에 남음",
+      "text": "one of two hunks selected and committed"
+    },
+    {
+      "id": "CHG-05.2",
+      "requirementId": "CHG-05",
+      "acceptance": "두 hunk 중 하나만 커밋하면 다른 변경은 working tree에 남음",
+      "text": "other hunk remains working change"
+    },
+    {
+      "id": "CHG-09.1",
+      "requirementId": "CHG-09",
+      "acceptance": "여러 줄 메시지와 템플릿을 유지하고 재시작 뒤 미전송 초안 복구",
+      "text": "multiline message retained"
+    },
+    {
+      "id": "CHG-09.2",
+      "requirementId": "CHG-09",
+      "acceptance": "여러 줄 메시지와 템플릿을 유지하고 재시작 뒤 미전송 초안 복구",
+      "text": "template retained"
+    },
+    {
+      "id": "CHG-09.3",
+      "requirementId": "CHG-09",
+      "acceptance": "여러 줄 메시지와 템플릿을 유지하고 재시작 뒤 미전송 초안 복구",
+      "text": "unsent draft restored after restart"
+    },
+    {
+      "id": "CHG-10.1",
+      "requirementId": "CHG-10",
+      "acceptance": "명시적으로 선택한 snapshot만 커밋되고 완료 SHA 표시",
+      "text": "explicitly selected snapshot committed"
+    },
+    {
+      "id": "CHG-10.2",
+      "requirementId": "CHG-10",
+      "acceptance": "명시적으로 선택한 snapshot만 커밋되고 완료 SHA 표시",
+      "text": "completion SHA visible"
+    },
+    {
+      "id": "CHG-13.1",
+      "requirementId": "CHG-13",
+      "acceptance": "hook 실패면 커밋 성공으로 표시하지 않고 수정 사항과 로그 보존",
+      "text": "hook failure not shown as success"
+    },
+    {
+      "id": "CHG-13.2",
+      "requirementId": "CHG-13",
+      "acceptance": "hook 실패면 커밋 성공으로 표시하지 않고 수정 사항과 로그 보존",
+      "text": "changes retained"
+    },
+    {
+      "id": "CHG-13.3",
+      "requirementId": "CHG-13",
+      "acceptance": "hook 실패면 커밋 성공으로 표시하지 않고 수정 사항과 로그 보존",
+      "text": "failure log retained"
+    },
+    {
+      "id": "CHG-20.1",
+      "requirementId": "CHG-20",
+      "acceptance": "미저장 buffer와 disk/index 차이를 알려 사용자가 예상한 내용만 기록",
+      "text": "unsaved buffer versus disk versus index difference communicated"
+    },
+    {
+      "id": "CHG-20.2",
+      "requirementId": "CHG-20",
+      "acceptance": "미저장 buffer와 disk/index 차이를 알려 사용자가 예상한 내용만 기록",
+      "text": "only user-expected snapshot committed"
+    },
+    {
+      "id": "BR-01.1",
+      "requirementId": "BR-01",
+      "acceptance": "현재 HEAD 또는 선택 ref에서 브랜치를 만들고 이름 검증",
+      "text": "branch from HEAD"
+    },
+    {
+      "id": "BR-01.2",
+      "requirementId": "BR-01",
+      "acceptance": "현재 HEAD 또는 선택 ref에서 브랜치를 만들고 이름 검증",
+      "text": "branch from selected ref"
+    },
+    {
+      "id": "BR-01.3",
+      "requirementId": "BR-01",
+      "acceptance": "현재 HEAD 또는 선택 ref에서 브랜치를 만들고 이름 검증",
+      "text": "invalid branch names rejected"
+    },
+    {
+      "id": "BR-02.1",
+      "requirementId": "BR-02",
+      "acceptance": "remote tracking 생성 후 올바른 upstream으로 push",
+      "text": "remote tracking branch created"
+    },
+    {
+      "id": "BR-02.2",
+      "requirementId": "BR-02",
+      "acceptance": "remote tracking 생성 후 올바른 upstream으로 push",
+      "text": "correct upstream push verified"
+    },
+    {
+      "id": "BR-06.1",
+      "requirementId": "BR-06",
+      "acceptance": "fast-forward와 merge commit을 구별하고 중단 후 Git 상태 일치",
+      "text": "fast-forward distinguished from merge commit"
+    },
+    {
+      "id": "BR-06.2",
+      "requirementId": "BR-06",
+      "acceptance": "fast-forward와 merge commit을 구별하고 중단 후 Git 상태 일치",
+      "text": "abort restores matching Git state"
+    },
+    {
+      "id": "BR-14.1",
+      "requirementId": "BR-14",
+      "acceptance": "base/current/incoming/result와 미해결 수를 표시",
+      "text": "base visible"
+    },
+    {
+      "id": "BR-14.2",
+      "requirementId": "BR-14",
+      "acceptance": "base/current/incoming/result와 미해결 수를 표시",
+      "text": "current visible"
+    },
+    {
+      "id": "BR-14.3",
+      "requirementId": "BR-14",
+      "acceptance": "base/current/incoming/result와 미해결 수를 표시",
+      "text": "incoming visible"
+    },
+    {
+      "id": "BR-14.4",
+      "requirementId": "BR-14",
+      "acceptance": "base/current/incoming/result와 미해결 수를 표시",
+      "text": "result visible"
+    },
+    {
+      "id": "BR-14.5",
+      "requirementId": "BR-14",
+      "acceptance": "base/current/incoming/result와 미해결 수를 표시",
+      "text": "unresolved count visible"
+    },
+    {
+      "id": "BR-15.1",
+      "requirementId": "BR-15",
+      "acceptance": "선택 결과를 저장·검토할 수 있고 both가 코드 정합성 보장을 뜻하지 않음",
+      "text": "accept current result review and save"
+    },
+    {
+      "id": "BR-15.2",
+      "requirementId": "BR-15",
+      "acceptance": "선택 결과를 저장·검토할 수 있고 both가 코드 정합성 보장을 뜻하지 않음",
+      "text": "accept incoming result review and save"
+    },
+    {
+      "id": "BR-15.3",
+      "requirementId": "BR-15",
+      "acceptance": "선택 결과를 저장·검토할 수 있고 both가 코드 정합성 보장을 뜻하지 않음",
+      "text": "accept both result review and save"
+    },
+    {
+      "id": "BR-15.4",
+      "requirementId": "BR-15",
+      "acceptance": "선택 결과를 저장·검토할 수 있고 both가 코드 정합성 보장을 뜻하지 않음",
+      "text": "manual edit review and save"
+    },
+    {
+      "id": "BR-15.5",
+      "requirementId": "BR-15",
+      "acceptance": "선택 결과를 저장·검토할 수 있고 both가 코드 정합성 보장을 뜻하지 않음",
+      "text": "both not represented as correctness guarantee"
+    },
+    {
+      "id": "BR-17.1",
+      "requirementId": "BR-17",
+      "acceptance": "파일 완료가 repository merge 완료로 잘못 표시되지 않음",
+      "text": "file save not repository merge completion"
+    },
+    {
+      "id": "BR-17.2",
+      "requirementId": "BR-17",
+      "acceptance": "파일 완료가 repository merge 완료로 잘못 표시되지 않음",
+      "text": "file stage not repository merge completion"
+    },
+    {
+      "id": "SYN-01.1",
+      "requirementId": "SYN-01",
+      "acceptance": "fetch가 working 파일을 바꾸지 않으며 삭제된 remote ref 정리 확인",
+      "text": "fetch preserves working bytes"
+    },
+    {
+      "id": "SYN-01.2",
+      "requirementId": "SYN-01",
+      "acceptance": "fetch가 working 파일을 바꾸지 않으며 삭제된 remote ref 정리 확인",
+      "text": "all-remotes action verified"
+    },
+    {
+      "id": "SYN-01.3",
+      "requirementId": "SYN-01",
+      "acceptance": "fetch가 working 파일을 바꾸지 않으며 삭제된 remote ref 정리 확인",
+      "text": "deleted remote ref pruned"
+    },
+    {
+      "id": "SYN-02.1",
+      "requirementId": "SYN-02",
+      "acceptance": "선택 전략대로 이력을 반영하고 divergence 오류에 복구 경로 제공",
+      "text": "chosen merge strategy history"
+    },
+    {
+      "id": "SYN-02.2",
+      "requirementId": "SYN-02",
+      "acceptance": "선택 전략대로 이력을 반영하고 divergence 오류에 복구 경로 제공",
+      "text": "chosen rebase strategy history"
+    },
+    {
+      "id": "SYN-02.3",
+      "requirementId": "SYN-02",
+      "acceptance": "선택 전략대로 이력을 반영하고 divergence 오류에 복구 경로 제공",
+      "text": "remote and ref selection respected"
+    },
+    {
+      "id": "SYN-02.4",
+      "requirementId": "SYN-02",
+      "acceptance": "선택 전략대로 이력을 반영하고 divergence 오류에 복구 경로 제공",
+      "text": "divergence error offers recovery"
+    },
+    {
+      "id": "SYN-03.1",
+      "requirementId": "SYN-03",
+      "acceptance": "대상 host/repo/ref를 표시하고 remote에서 동일 SHA 확인",
+      "text": "destination host repository ref visible"
+    },
+    {
+      "id": "SYN-03.2",
+      "requirementId": "SYN-03",
+      "acceptance": "대상 host/repo/ref를 표시하고 remote에서 동일 SHA 확인",
+      "text": "remote SHA matches pushed SHA"
+    },
+    {
+      "id": "SYN-04.1",
+      "requirementId": "SYN-04",
+      "acceptance": "fetch 전후 기준 시점을 표시하고 각 커밋 diff 탐색 가능",
+      "text": "pre-fetch baseline time visible"
+    },
+    {
+      "id": "SYN-04.2",
+      "requirementId": "SYN-04",
+      "acceptance": "fetch 전후 기준 시점을 표시하고 각 커밋 diff 탐색 가능",
+      "text": "post-fetch baseline time visible"
+    },
+    {
+      "id": "SYN-04.3",
+      "requirementId": "SYN-04",
+      "acceptance": "fetch 전후 기준 시점을 표시하고 각 커밋 diff 탐색 가능",
+      "text": "incoming commit diff navigable"
+    },
+    {
+      "id": "SYN-04.4",
+      "requirementId": "SYN-04",
+      "acceptance": "fetch 전후 기준 시점을 표시하고 각 커밋 diff 탐색 가능",
+      "text": "outgoing commit diff navigable"
+    },
+    {
+      "id": "NFR-01.1",
+      "requirementId": "NFR-01",
+      "acceptance": "같은 common git dir의 충돌 쓰기 직렬화 및 외부 index.lock 충돌 안전 종료",
+      "text": "same common dir writes serialized"
+    },
+    {
+      "id": "NFR-01.2",
+      "requirementId": "NFR-01",
+      "acceptance": "같은 common git dir의 충돌 쓰기 직렬화 및 외부 index.lock 충돌 안전 종료",
+      "text": "external index.lock safely refuses without deletion"
+    },
+    {
+      "id": "NFR-02.1",
+      "requirementId": "NFR-02",
+      "acceptance": "다른 major 거절, 취소 후 실제 결과 재조회, 프로세스 재시작 후 중복 쓰기 없음",
+      "text": "different RPC major rejected"
+    },
+    {
+      "id": "NFR-02.2",
+      "requirementId": "NFR-02",
+      "acceptance": "다른 major 거절, 취소 후 실제 결과 재조회, 프로세스 재시작 후 중복 쓰기 없음",
+      "text": "actual state re-queried after cancellation"
+    },
+    {
+      "id": "NFR-02.3",
+      "requirementId": "NFR-02",
+      "acceptance": "다른 major 거절, 취소 후 실제 결과 재조회, 프로세스 재시작 후 중복 쓰기 없음",
+      "text": "restart performs no duplicate writes"
+    },
+    {
+      "id": "NFR-04.1",
+      "requirementId": "NFR-04",
+      "acceptance": "미신뢰 repo에서는 코드 실행 유발 설정을 제한하고 서비스 계층에서도 검사",
+      "text": "untrusted hooks restricted"
+    },
+    {
+      "id": "NFR-04.2",
+      "requirementId": "NFR-04",
+      "acceptance": "미신뢰 repo에서는 코드 실행 유발 설정을 제한하고 서비스 계층에서도 검사",
+      "text": "untrusted external diff/textconv/filter restricted"
+    },
+    {
+      "id": "NFR-04.3",
+      "requirementId": "NFR-04",
+      "acceptance": "미신뢰 repo에서는 코드 실행 유발 설정을 제한하고 서비스 계층에서도 검사",
+      "text": "untrusted submodule execution restricted"
+    },
+    {
+      "id": "NFR-04.4",
+      "requirementId": "NFR-04",
+      "acceptance": "미신뢰 repo에서는 코드 실행 유발 설정을 제한하고 서비스 계층에서도 검사",
+      "text": "service layer enforces trust"
+    }
+  ]
+}

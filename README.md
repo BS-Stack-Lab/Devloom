@@ -147,3 +147,20 @@ DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence pnpm run test:gitTransports
 This fixture suite requires the pinned ordinary Workbench, locally installed nonce-owned companion and bundled native Git extension. It exercises loopback HTTPS Basic authentication through the exact-host native CredentialsProvider and genuine unprivileged current-user OpenSSH public-key authentication. TLS certificate chain and IP SAN checks and pinned SSH host-key verification stay enabled. Credentials, keys and child-only Git/SSH configuration remain private; user configuration, agents, Keychain and system services are untouched. A host that cannot safely run the native daemon fails the required SSH cases.
 
 The runner asserts native clone/fetch/pull/push SHA outcomes, authentication and trust rejection, separate API and rendered-progress cancellation, authenticated interruption and authoritative pre/post-update push outcomes. Terminal Git initializes fixtures and independently reads state; it does not substitute for IDE operations. HTTP unit backends are synthetic evidence only. Newly created partial clone targets are recorded, while preexisting targets and sentinel bytes are protected. Ambiguous or rejected backend obligations preserve private spools and fail shutdown; no journal, Git lock or profile repair occurs. Every attempt keeps its own external result and sanitized logs. Completion applies only to cases actually reported PASS, with no overall P0/P1, parity, external-account or distribution claim.
+
+## P1 acceptance evidence
+
+The default `test:localGit` remains the original eight groups with 100 second group deadlines. Additional targeted native fixtures are opt-in and have 180 second group deadlines:
+
+```sh
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence DEVLOOM_LOCAL_GIT_SCENARIOS=p1-changes pnpm run test:localGit
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence DEVLOOM_LOCAL_GIT_SCENARIOS=p1-sync pnpm run test:localGit
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence node --test tests/p1Coverage.test.mjs tests/p1CoverageEvidence.test.mjs tests/localGitAutofetch.test.mjs tests/localGitSession.test.mjs
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence node scripts/p1Coverage.mjs
+```
+
+Build own TypeScript before dist consumers and compile the pinned native application before native fixtures. `run-result.json` distinguishes the selected/completed groups, original full suite and targeted P1 completion. Native automatic fetch requires a new fetch child start and matching close after lease release and focus opportunity; a timeout fails with diagnostics.
+
+The read-only report preserves all 28 original P1 rows and their 87 conjunctive clauses, including original `planned` status. Set `DEVLOOM_P1_EVIDENCE_INDEX` to an external coordinator or QA index for source-bound producer evidence admission. No index produces an explicit unverified inventory. Malformed, stale, foreign or unsafe evidence fails the report command. Exit zero means report generation succeeded; it does not certify whole P1 acceptance. Native API, rendered observations, physical interaction, fixture CLI, static and historical evidence remain distinct. Missing physical controls, account features, selected remote/ref interaction, history navigation and visible baseline timestamps remain explicit gaps unless independently observed and admitted.
+
+Launcher regression tests use real owned Node children, marker/OS process identity checks and an independent sentinel. Injected probe failures validate harness safety; they do not certify native application startup. Ambiguous ownership preserves exact fixture/profile leftovers without signaling or adopting them. Process snapshots and nonce markers are best-effort local ownership checks, not atomic process handles or an OS sandbox against same-user races.
