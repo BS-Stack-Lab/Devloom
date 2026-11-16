@@ -168,8 +168,32 @@ async function raw(parts, end = false, port = server.port, ca = secret.ca) {
 async function denied(name, parts, status, end = false) {
   const before = count;
   const event = server.events.length;
+  const preexistingSpools = new Set(
+    readdirSync(secret.directory).filter((name) => name.startsWith('request-')),
+  );
   const value = await raw(parts, end);
-  await new Promise((done) => setTimeout(done, 30));
+  await waitFor(
+    `denied ${name} request resources closed`,
+    () => {
+      const statistics = server.statistics();
+      const requestEvents = server.events.slice(event);
+      const requestIds = new Set(
+        requestEvents.filter((item) => Number.isSafeInteger(item.id)).map((item) => item.id),
+      );
+      const settledIds = new Set(
+        requestEvents.filter((item) => item.kind === 'request-settled').map((item) => item.id),
+      );
+      return (
+        [...requestIds].every((id) => settledIds.has(id)) &&
+        statistics.sockets === 0 &&
+        statistics.activeChildren === 0 &&
+        readdirSync(secret.directory)
+          .filter((name) => name.startsWith('request-'))
+          .every((name) => preexistingSpools.has(name))
+      );
+    },
+    3000,
+  );
   assert.equal(count, before, name);
   assert.equal(fixtureGit(['show-ref']), initialRefs, name);
   assert.ok(

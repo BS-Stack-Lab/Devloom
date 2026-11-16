@@ -207,6 +207,7 @@ export async function httpsServer(secret, remote, nonce, options = {}) {
         unlinkSync(spool);
       }
       if (admitted && (!relayStarted || !pending.has(token))) busy = false;
+      event({ kind: 'request-settled' });
     }
   }
   function schedule(request, response, expectation = false) {
