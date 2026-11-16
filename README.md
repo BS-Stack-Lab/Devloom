@@ -28,7 +28,7 @@ cargo fmt --manifest-path crates/devloom-sidecar/Cargo.toml -- --check
 cargo clippy --manifest-path crates/devloom-sidecar/Cargo.toml --locked --all-targets -- -D warnings
 cargo test --manifest-path crates/devloom-sidecar/Cargo.toml --locked
 cargo build --manifest-path crates/devloom-sidecar/Cargo.toml --locked
-pnpm run test
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence pnpm run test
 pnpm run upstream:build
 pnpm run test:extension
 DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence pnpm run test:profiles
@@ -96,7 +96,7 @@ Each invocation creates a unique evidence session, disposable repositories and b
 
 Tracked patches under `patches/localGit` target the immutable upstream SHA. Prepare/build verifies payload, preimage and postimage hashes, applies pristine sources deterministically, accepts an identical second application and rejects partial application or unrelated source drift. Never repin upstream or edit ignored native sources independently of their tracked patches.
 
-Authenticated HTTPS/SSH servers, sudden-crash draft durability, untitled-only recovery, other operating systems, signed distribution packaging and automatic manual-recovery tooling remain outside this implementation.
+The authenticated transport fixtures below use local endpoints only. Sudden-crash draft durability, untitled-only recovery, other operating systems, signed distribution packaging and automatic manual-recovery tooling remain outside this implementation.
 
 For independent QA, set `DEVLOOM_LOCAL_GIT_SCENARIOS` to a comma-separated subset of `normal`, `concurrency`, `linked-worktree`, `untrusted`, `missing-git`, `unsupported-git`, `worker-crash`, `main-crash`. Unknown, empty and duplicate names are refused. The default remains all eight scenarios; `run-result.json` records the exact selected/completed groups and identifies subset runs, which do not replace the full mandatory suite.
 
@@ -137,3 +137,13 @@ Exit 0 means trustworthy complete enumeration, even when mapping coverage is inc
 Native SCM history owns multiline commit messages, templates and unsubmitted drafts. A failing pre-commit hook and Cancel on the rendered native unsaved-file warning retain the draft and all H/index/disk/buffer contents without retry. Native Git may refresh an unprimed index's cache metadata while retaining staged modes and object IDs; raw index byte equality in these fixtures is asserted after an explicit prelaunch dry-run stabilizes that metadata. It is not a universal byte-identity promise. Explicit retry remains required. A successful commit resets the input to the current native template.
 
 For eligible dirty tracked documents, **Commit Changes** commits the staged index I while retaining dirty buffer B and disk D. **Save All & Commit Changes** saves B and re-adds eligible staged files, replacing partial staging in those files. **Cancel** makes no commit. The warning includes multiple eligible staged dirty files, but excludes unstaged-only dirty documents when staged entries exist, out-of-repository documents and untitled editors. Setting `git.promptToSaveFilesBeforeCommit` to `never` suppresses that warning and commits I. These observed native boundaries are not a warning guarantee for every editor or command. Native backup errors offer OK to keep editing; Quit Anyway permits native forced shutdown and was not selected in verification.
+
+## Authenticated local transport fixtures
+
+```sh
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence pnpm run test:gitTransports
+```
+
+This fixture suite requires the pinned ordinary Workbench, locally installed nonce-owned companion and bundled native Git extension. It exercises loopback HTTPS Basic authentication through the exact-host native CredentialsProvider and genuine unprivileged current-user OpenSSH public-key authentication. TLS certificate chain and IP SAN checks and pinned SSH host-key verification stay enabled. Credentials, keys and child-only Git/SSH configuration remain private; user configuration, agents, Keychain and system services are untouched. A host that cannot safely run the native daemon fails the required SSH cases.
+
+The runner asserts native clone/fetch/pull/push SHA outcomes, authentication and trust rejection, separate API and rendered-progress cancellation, authenticated interruption and authoritative pre/post-update push outcomes. Terminal Git initializes fixtures and independently reads state; it does not substitute for IDE operations. HTTP unit backends are synthetic evidence only. Newly created partial clone targets are recorded, while preexisting targets and sentinel bytes are protected. Ambiguous or rejected backend obligations preserve private spools and fail shutdown; no journal, Git lock or profile repair occurs. Every attempt keeps its own external result and sanitized logs. Completion applies only to cases actually reported PASS, with no overall P0/P1, parity, external-account or distribution claim.
