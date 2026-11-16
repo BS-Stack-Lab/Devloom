@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { API } from '../vendor/code-oss/extensions/git/src/api/git';
 import { git, snapshot } from './localGitFixtures';
+import { awaitAutofetch, diagnosticEvents, type GitEvent } from './localGitAutofetch';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function wait(path: string): Promise<void> {
   const deadline = Date.now() + 40000;
@@ -25,6 +26,15 @@ export async function run(): Promise<void> {
     started: Date.now(),
     repositoryPath,
   };
+  const focusEvents: { at: number; focused: boolean }[] = [
+    { at: Date.now(), focused: vscode.window.state.focused },
+  ];
+  const focusListener = vscode.window.onDidChangeWindowState((state) =>
+    focusEvents.push({ at: Date.now(), focused: state.focused }),
+  );
+  let beforeFetch: GitEvent[] = [];
+  let enabledAt = 0;
+  let upstreamBefore = '';
   try {
     const extension = vscode.extensions.getExtension<{ getAPI(version: number): API }>(
       'vscode.git',
@@ -58,11 +68,17 @@ export async function run(): Promise<void> {
       result.requested = Date.now();
       const scenario = process.env.DEVLOOM_GIT_SCENARIO;
       if (scenario === 'alias') {
-        result.autofetchEnabled = Date.now();
+        beforeFetch = diagnosticEvents(
+          await vscode.commands.executeCommand('devloom.diagnoseLocalGit', repository.rootUri),
+        );
+        upstreamBefore = git(repositoryPath, ['rev-parse', 'refs/remotes/origin/main']);
+        enabledAt = Date.now();
+        result.autofetchEnabled = enabledAt;
+        result.autofetchBefore = beforeFetch;
         await vscode.workspace
           .getConfiguration('git')
           .update('autofetch', 'all', vscode.ConfigurationTarget.Global);
-        await delay(200);
+        await vscode.commands.executeCommand('workbench.action.focusWindow');
         const stage = repository.add([file]);
         writeFileSync(join(root, 'requested-b'), String(result.requested));
         await stage;
@@ -93,21 +109,21 @@ export async function run(): Promise<void> {
       repository.rootUri,
     );
     if (process.env.DEVLOOM_GIT_SCENARIO === 'alias' && role === 'b') {
-      for (
-        let attempt = 0;
-        attempt < 30 && !JSON.stringify(result.finalDiagnostic).includes('\"command\":\"fetch\"');
-        attempt++
-      ) {
-        await delay(100);
-        result.finalDiagnostic = await vscode.commands.executeCommand(
-          'devloom.diagnoseLocalGit',
-          repository.rootUri,
-        );
-      }
-      await vscode.workspace
-        .getConfiguration('git')
-        .update('autofetch', false, vscode.ConfigurationTarget.Global);
-      assert.match(JSON.stringify(result.finalDiagnostic), /\"command\":\"fetch\"/);
+      result.autofetch = await awaitAutofetch({
+        before: beforeFetch,
+        enabledAt,
+        releasedAt: Number(readFileSync(join(root, 'release'), 'utf8')),
+        focused: () => vscode.window.state.focused,
+        inspect: () =>
+          vscode.commands.executeCommand('devloom.diagnoseLocalGit', repository.rootUri),
+      });
+      result.focusEvents = focusEvents;
+      assert.equal(git(repositoryPath, ['rev-parse', 'refs/remotes/origin/main']), upstreamBefore);
+      assert.equal(readFileSync(file, 'utf8'), 'second host working bytes\n');
+      assert.match(
+        JSON.stringify((result.autofetch as { diagnostic: unknown }).diagnostic),
+        /ready/,
+      );
     }
     if (role === 'b') writeFileSync(join(root, 'finished-b'), 'done');
     result.status = 'pass';
@@ -115,6 +131,11 @@ export async function run(): Promise<void> {
     result.error = error instanceof Error ? error.stack : String(error);
     throw error;
   } finally {
+    focusListener.dispose();
+    if (enabledAt)
+      await vscode.workspace
+        .getConfiguration('git')
+        .update('autofetch', false, vscode.ConfigurationTarget.Global);
     writeFileSync(join(evidence, 'result.json'), JSON.stringify(result, null, 2));
   }
 }

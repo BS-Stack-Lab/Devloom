@@ -1,12 +1,35 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, chmodSync, symlinkSync, cpSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  chmodSync,
+  symlinkSync,
+  cpSync,
+  existsSync,
+} from 'node:fs';
+import { join, dirname } from 'node:path';
+import { isolatedEnvironment, gitAdapter } from './commitStateGit';
 export function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, {
+  let directory = cwd;
+  while (
+    !process.env.DEVLOOM_COMMIT_FIXTURE_GIT &&
+    !existsSync(join(directory, 'fixture-git')) &&
+    dirname(directory) !== directory
+  )
+    directory = dirname(directory);
+  const executable =
+    process.env.DEVLOOM_COMMIT_FIXTURE_GIT ||
+    (existsSync(join(directory, 'fixture-git'))
+      ? join(directory, 'fixture-git')
+      : '/opt/homebrew/bin/git');
+  return execFileSync(executable, args, {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+    env: isolatedEnvironment(),
+    timeout: 10000,
+    maxBuffer: 1024 * 1024,
   }).trimEnd();
 }
 export function identity(root: string): void {
@@ -23,6 +46,7 @@ export const changed = baseline
   .replace('line 25\n', 'remaining change\n');
 export const selected = baseline.replace('line 2\n', 'selected change\n');
 export function setupFixture(root: string): void {
+  gitAdapter(root);
   const repository = join(root, 'repository');
   mkdirSync(repository);
   git(repository, ['init', '-b', 'main']);
@@ -50,9 +74,7 @@ export function snapshot(root: string): object {
 export function prepareConcurrent(root: string, alias: boolean): string {
   const hooks = join(root, 'hooks');
   mkdirSync(hooks);
-  execFileSync('git', ['config', 'core.hooksPath', hooks], {
-    cwd: join(root, 'repository'),
-  });
+  git(join(root, 'repository'), ['config', 'core.hooksPath', hooks]);
   const hook = join(hooks, 'pre-commit');
   writeFileSync(
     hook,
@@ -61,9 +83,7 @@ export function prepareConcurrent(root: string, alias: boolean): string {
   chmodSync(hook, 0o700);
   let second = join(root, 'repository');
   if (alias) {
-    execFileSync('git', ['worktree', 'add', '-b', 'linked', join(root, 'linked')], {
-      cwd: second,
-    });
+    git(second, ['worktree', 'add', '-b', 'linked', join(root, 'linked')]);
     symlinkSync(join(root, 'linked'), join(root, 'alias'));
     second = join(root, 'alias');
   }
@@ -79,7 +99,7 @@ export function configureScenario(root: string, profile: string): void {
     symlinkSync('/usr/bin/dirname', join(bin, 'dirname'));
   }
   if (profile === 'unsupported') {
-    const actualGit = execFileSync('/usr/bin/which', ['git'], { encoding: 'utf8' }).trim();
+    const actualGit = join(root, 'fixture-git');
     const fake = join(root, 'old-git');
     writeFileSync(
       fake,
@@ -93,12 +113,8 @@ export function configureScenario(root: string, profile: string): void {
     writeFileSync(helper, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`);
     chmodSync(helper, 0o700);
     cpSync(helper, join(root, 'repository/.git/devloom-fixture-hooks/pre-commit'));
-    execFileSync('git', ['config', 'filter.fixture.clean', helper], {
-      cwd: join(root, 'repository'),
-    });
-    execFileSync('git', ['config', 'diff.fixture.textconv', helper], {
-      cwd: join(root, 'repository'),
-    });
+    git(join(root, 'repository'), ['config', 'filter.fixture.clean', helper]);
+    git(join(root, 'repository'), ['config', 'diff.fixture.textconv', helper]);
     writeFileSync(join(root, 'repository/.gitattributes'), '* filter=fixture diff=fixture\n');
   }
 }
