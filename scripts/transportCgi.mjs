@@ -88,7 +88,7 @@ export async function relayCgi({
       assert.equal(direct.group, child.pid, 'Backend group mismatch');
       assert.equal(direct.uid, process.getuid(), 'Backend owner mismatch');
       assert.equal(direct.parent, process.pid, 'Backend parent mismatch');
-    } else assert.ok(closed, 'Missing live backend identity');
+    } else assert.ok(captured.has(child.pid), 'Missing live backend identity');
     for (const row of tree.filter((row) => row.group === child.pid)) {
       assert.equal(row.uid, process.getuid());
       const previous = captured.get(row.pid);

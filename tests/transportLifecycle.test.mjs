@@ -5,6 +5,8 @@ import childProcess from 'node:child_process';
 import fileSystem from 'node:fs';
 import net from 'node:net';
 import { syncBuiltinESMExports } from 'node:module';
+import { Writable } from 'node:stream';
+import { relayCgi } from '../scripts/transportCgi.mjs';
 import { sshServer } from '../scripts/transportSsh.mjs';
 import { randomBytes } from 'node:crypto';
 import {
@@ -665,6 +667,318 @@ for (const mode of [
       );
     } finally {
       await fixture.cleanup();
+    }
+  });
+}
+
+for (const mode of ['control', 'exit-close-gap']) {
+  test(`actual CGI ${mode} retains accounting until owned stdio and child close`, async (t) => {
+    const caseNonce = randomBytes(16).toString('hex');
+    const fixture = join(directory, `cgi-lifetime-${mode}-${caseNonce}`);
+    mkdirSync(fixture, { mode: 0o700 });
+    const spool = join(fixture, 'body');
+    const empty = join(fixture, 'empty');
+    const ready = join(fixture, 'ready');
+    const exitGate = join(fixture, 'exit');
+    const release = join(fixture, 'release');
+    const descendantReady = join(fixture, 'descendant-ready');
+    const payload = Buffer.from(`${caseNonce}:payload\n`);
+    privateFile(spool, payload);
+    privateFile(empty, '');
+    const originalExec = childProcess.execFileSync;
+    const originalRead = fileSystem.createReadStream;
+    const originalAssert = assert.ok;
+    const columns = 'pid=,ppid=,pgid=,uid=,lstart=,comm=';
+    const parse = (text) =>
+      text
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(.{24})\s+(.+)$/);
+          return (
+            match && {
+              pid: +match[1],
+              parent: +match[2],
+              group: +match[3],
+              uid: +match[4],
+              start: match[5],
+            }
+          );
+        })
+        .filter(Boolean);
+    const snapshot = () =>
+      parse(originalExec('/bin/ps', ['-axo', columns], { encoding: 'utf8', timeout: 1000 }));
+    const matches = (row, proof) =>
+      row &&
+      proof &&
+      row.pid === proof.pid &&
+      row.uid === proof.uid &&
+      row.group === proof.group &&
+      row.start === proof.start;
+    let child;
+    let directProof;
+    let descendantProof;
+    let reader;
+    let exited;
+    let closed;
+    let readerClosed;
+    let seen = 0;
+    let missing = 0;
+    let missingAssertions = 0;
+    let settled = false;
+    let resolved = false;
+    let result;
+    let failureClass;
+    let tracked;
+    let gap;
+    const events = [];
+    const active = new Set();
+    const token = Object.freeze({});
+    const chunks = [];
+    const response = new Writable({
+      write(chunk, _encoding, done) {
+        chunks.push(Buffer.from(chunk));
+        done();
+      },
+    });
+    let responseStatus;
+    response.writeHead = (status) => {
+      responseStatus = status;
+    };
+    t.mock.method(fileSystem, 'createReadStream', (path, options) => {
+      const stream = originalRead(path, options);
+      if (path === spool) {
+        reader = stream;
+        stream.once('close', () => {
+          readerClosed = Date.now();
+        });
+      }
+      return stream;
+    });
+    t.mock.method(assert, 'ok', (value, message, ...args) => {
+      if (!value && message === 'Missing live backend identity') missingAssertions++;
+      return originalAssert(value, message, ...args);
+    });
+    t.mock.method(childProcess, 'execFileSync', (command, args, options) => {
+      const value = originalExec(command, args, options);
+      if (command === '/bin/ps' && args.length === 2 && args[1] === columns) {
+        const rows = parse(value);
+        const direct = rows.find((row) => row.pid === child?.pid);
+        const descendant = rows.find((row) => row.pid === descendantProof?.pid);
+        if (
+          matches(direct, directProof) &&
+          (mode === 'control' || matches(descendant, descendantProof))
+        )
+          seen++;
+        if (!direct && matches(descendant, descendantProof)) missing++;
+      }
+      return value;
+    });
+    syncBuiltinESMExports();
+    try {
+      const helper = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(descendantReady)},JSON.stringify({nonce:process.argv.at(-1),pid:process.pid}),{mode:384});const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);process.exit(0)}},5);`;
+      const program = `const fs=require('node:fs');${mode === 'exit-close-gap' ? `const descendant=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(helper)},process.argv.at(-1)],{stdio:['ignore',process.stdout,process.stderr]});descendant.once('error',()=>process.exit(85));` : ''}let bytes=0;process.stdin.on('data',b=>bytes+=b.length);process.stdin.on('end',()=>{process.stdout.write('Content-Type: application/octet-stream\\r\\n\\r\\nowned-body',()=>{fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({nonce:process.argv.at(-1),pid:process.pid,bytes}),{mode:384});const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitGate)})){clearInterval(timer);process.exit(0)}},5);});});`;
+      tracked = relayCgi({
+        request: { method: 'POST', contentType: 'application/x-git-receive-pack-request' },
+        response,
+        remote: join(fixture, 'remote.git'),
+        selected: {
+          path: `/remote-${caseNonce}.git/git-receive-pack`,
+          service: 'git-receive-pack',
+        },
+        spool,
+        bytes: payload.length,
+        emptyGlobal: empty,
+        event: (event) => events.push(event),
+        control: () => 'release',
+        accounting: { active, token },
+        backend: (env) => {
+          child = spawn(process.execPath, ['-e', program, caseNonce], {
+            env,
+            detached: true,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          child.once('exit', (code, signal) => {
+            exited = { at: Date.now(), code, signal };
+          });
+          child.once('close', (code, signal) => {
+            closed = { at: Date.now(), code, signal };
+          });
+          directProof = snapshot().find((row) => row.pid === child.pid);
+          assert.ok(
+            directProof?.parent === process.pid &&
+              directProof.uid === process.getuid() &&
+              directProof.group === child.pid,
+            'Actual backend must have stable owned launch identity',
+          );
+          const argv = originalExec('/bin/ps', ['-p', String(child.pid), '-o', 'args='], {
+            encoding: 'utf8',
+            timeout: 1000,
+          });
+          assert.ok(argv.includes(caseNonce), 'Live backend arguments must bind the nonce');
+          return child;
+        },
+      }).then(
+        (value) => {
+          resolved = true;
+          result = value;
+          settled = true;
+        },
+        (error) => {
+          failureClass = ['Backend stream failed', 'Missing live backend identity'].includes(
+            error.message,
+          )
+            ? error.message
+            : 'OTHER_RELAY_FAILURE';
+          settled = true;
+        },
+      );
+      await waitFor('actual CGI body and nonce readiness', () => existsSync(ready), 4000);
+      const report = JSON.parse(readFileSync(ready, 'utf8'));
+      assert.ok(
+        report.nonce === caseNonce && report.pid === child.pid && report.bytes === payload.length,
+        'Actual backend must consume the complete owned body',
+      );
+      if (mode === 'exit-close-gap') {
+        await waitFor('actual held descendant readiness', () => existsSync(descendantReady), 4000);
+        const helperReport = JSON.parse(readFileSync(descendantReady, 'utf8'));
+        descendantProof = snapshot().find((row) => row.pid === helperReport.pid);
+        assert.ok(
+          helperReport.nonce === caseNonce &&
+            descendantProof?.parent === child.pid &&
+            descendantProof.uid === process.getuid() &&
+            descendantProof.group === child.pid,
+          'Actual live descendant must have nonce-bound initial ancestry',
+        );
+      }
+      await waitFor('source observes owned backend and required descendant', () => seen >= 2, 4000);
+      privateFile(exitGate, 'exit');
+      await waitFor('actual direct child exit', () => exited, 4000);
+      if (mode === 'exit-close-gap') {
+        await waitFor(
+          'source observes missing direct PID with held owned stdio',
+          () => missing > 0,
+          4000,
+        );
+        const rows = snapshot();
+        gap = {
+          directAbsent: !rows.some((row) => row.pid === child.pid),
+          descendantPresent: matches(
+            rows.find((row) => row.pid === descendantProof.pid),
+            descendantProof,
+          ),
+          closeObserved: Boolean(closed),
+          active: active.size,
+          relaySettled: settled,
+          spoolPresent: existsSync(spool),
+        };
+        assert.ok(
+          gap.directAbsent && gap.descendantPresent && !gap.closeObserved,
+          'Actual exit must precede stdio close while the captured descendant remains',
+        );
+        assert.ok(
+          gap.active === 1 && !gap.relaySettled && gap.spoolPresent,
+          'Exit alone must not release accounting, settle the relay or remove the spool',
+        );
+        privateFile(release, 'release');
+      }
+      await waitFor('actual CGI relay settles after full close', () => settled, 5000);
+      await tracked;
+      const finalRows = snapshot();
+      const observation = {
+        mode,
+        kind: 'actual-node-child-and-reader-synthetic-writable-response',
+        directProof,
+        descendantProof,
+        exited,
+        closed,
+        readerClosed,
+        sourceOwnedSnapshots: seen,
+        sourceMissingDirectSnapshots: missing,
+        sourceMissingIdentityAssertions: missingAssertions,
+        gap,
+        resolved,
+        failureClass,
+        activeAfter: active.size,
+        inputBytes: report.bytes,
+        responseBytes: Buffer.concat(chunks).length,
+        ownedGroupEmpty: !finalRows.some((row) => row.group === child.pid),
+        spoolPresent: existsSync(spool),
+      };
+      privateFile(join(fixture, 'observation.json'), JSON.stringify(observation, null, 2));
+      assert.ok(
+        exited?.code === 0 && closed?.code === 0 && closed.at >= exited.at,
+        'Actual backend must exit successfully and subsequently close',
+      );
+      assert.ok(
+        reader?.closed && readerClosed && observation.ownedGroupEmpty,
+        'Actual reader and entire owned group must close',
+      );
+      assert.ok(
+        resolved,
+        'Healthy owned CGI lifetime must resolve after exit and actual stdio close',
+      );
+      assert.ok(
+        active.size === 0 && result?.inputBytes === payload.length && result.code === 0,
+        'Only fully closed successful relay may release active accounting',
+      );
+      assert.ok(
+        responseStatus === 200 && Buffer.concat(chunks).equals(Buffer.from('owned-body')),
+        'Actual CGI bytes must reach the synthetic writable without loss',
+      );
+      assert.ok(
+        missingAssertions === 0,
+        'Previously captured direct exit must not become an identity failure before close',
+      );
+      assert.ok(existsSync(spool), 'CGI itself must never delete the caller-owned spool');
+    } finally {
+      privateFile(
+        join(fixture, 'finally-observation.json'),
+        JSON.stringify(
+          {
+            mode,
+            kind: 'actual-resource-observation-with-fixture-only-initial-identity-proof',
+            directProof,
+            descendantProof,
+            exited,
+            closed,
+            readerClosed,
+            gap,
+            sourceOwnedSnapshots: seen,
+            sourceMissingDirectSnapshots: missing,
+            sourceMissingIdentityAssertions: missingAssertions,
+            sourceEventKinds: events.map((event) => event.kind),
+            resolved,
+            settled,
+            failureClass,
+            activeBeforeIndependentTeardown: active.size,
+            spoolPresent: existsSync(spool),
+          },
+          null,
+          2,
+        ),
+      );
+      for (const path of [exitGate, release]) if (!existsSync(path)) privateFile(path, 'release');
+      if (child && !closed) {
+        try {
+          await waitFor('owned CGI natural teardown', () => closed, 3000);
+        } catch {
+          const group = snapshot().filter((row) => row.group === child.pid);
+          assert.ok(
+            group.every((row) => matches(row, directProof) || matches(row, descendantProof)),
+            'Fallback teardown requires unchanged captured group identities',
+          );
+          if (group.length) process.kill(-child.pid, 'SIGTERM');
+          await waitFor('proven CGI fallback close', () => closed, 2000);
+        }
+      }
+      if (tracked) {
+        await waitFor('owned CGI relay teardown', () => settled, 5000);
+        await tracked;
+      }
+      response.destroy();
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
     }
   });
 }
