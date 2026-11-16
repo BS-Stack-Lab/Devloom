@@ -42,203 +42,357 @@ export async function sshServer(secret, remote, evidence, nonce) {
   const events = [];
   let child;
   let closed = false;
-  let output = '';
+  const output = Buffer.alloc(1024 * 1024);
+  let outputBytes = 0;
+  let overflow = false;
   let port;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const reservation = net.createServer();
-    await new Promise((resolve, reject) =>
-      reservation.once('error', reject).listen(0, '127.0.0.1', resolve),
+  let failure;
+  let launchIdentity;
+  let stopPromise;
+  let captured;
+  const identity = (pid) => {
+    const value = run('/bin/ps', ['-p', String(pid), '-o', 'uid=,lstart='], { timeout: 1000 });
+    assert.match(value, new RegExp(`^${process.getuid()}\\s+`));
+    return value;
+  };
+  const capture = () => {
+    assert.ok(launchIdentity, 'SSH launch ownership unproven');
+    const tree = processTree();
+    const direct = tree.find((row) => row.pid === child.pid);
+    assert.ok(direct || closed, 'SSH live child identity missing');
+    if (direct) assert.equal(direct.parent, process.pid, 'SSH launch parent changed');
+    const owned = new Set();
+    for (const [pid, previous] of captured) {
+      const current = tree.find((row) => row.pid === pid);
+      if (!current) continue;
+      assert.equal(current.group, child.pid, 'SSH captured group changed');
+      assert.equal(identity(pid), previous, 'SSH captured identity changed');
+      owned.add(pid);
+    }
+    const group = tree.filter((row) => row.group === child.pid);
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const row of group) {
+        if (!owned.has(row.pid) && owned.has(row.parent)) {
+          assert.ok(captured.size < 128, 'SSH captured process limit');
+          captured.set(row.pid, identity(row.pid));
+          owned.add(row.pid);
+          progress = true;
+        }
+      }
+    }
+    assert.ok(
+      group.every((row) => owned.has(row.pid)),
+      'SSH group ownership unproven',
     );
-    port = reservation.address().port;
-    const fields = {
-      Port: port,
-      ListenAddress: '127.0.0.1',
-      AddressFamily: 'inet',
-      HostKey: join(secret.directory, 'host'),
-      PidFile: join(directory, 'pid'),
-      AuthorizedKeysFile: join(directory, 'authorized'),
-      ForceCommand: `${quote(process.execPath)} ${quote(fileURLToPath(import.meta.url))} --dispatch ${quote(dispatcher)}`,
-      UsePAM: 'no',
-      AuthenticationMethods: 'publickey',
-      PubkeyAuthentication: 'yes',
-      PasswordAuthentication: 'no',
-      KbdInteractiveAuthentication: 'no',
-      GSSAPIAuthentication: 'no',
-      KerberosAuthentication: 'no',
-      HostbasedAuthentication: 'no',
-      PermitRootLogin: 'no',
-      AllowUsers: 'bipo',
-      StrictModes: 'yes',
-      DisableForwarding: 'yes',
-      PermitTTY: 'no',
-      PermitUserRC: 'no',
-      PermitUserEnvironment: 'no',
-      LoginGraceTime: 10,
-      MaxStartups: '2:30:3',
-      SetEnv: `ZDOTDIR=${join(directory, 'zsh')}`,
-      LogLevel: 'VERBOSE',
-    };
-    const config = privateFile(
-      join(directory, `server-${attempt}.conf`),
-      Object.entries(fields)
-        .map(([key, value]) => `${key} ${value}\n`)
-        .join(''),
-    );
-    run('/usr/sbin/sshd', ['-t', '-f', config]);
-    const effective = run('/usr/sbin/sshd', ['-T', '-f', config]);
-    const parsed = Object.fromEntries(
-      effective
-        .split('\n')
-        .map((line) => [line.slice(0, line.indexOf(' ')), line.slice(line.indexOf(' ') + 1)]),
-    );
-    for (const [key, value] of Object.entries(fields))
-      assert.equal(
-        parsed[key.toLowerCase()],
-        key === 'ListenAddress' ? `127.0.0.1:${port}` : String(value),
-      );
-    events.push({ kind: 'effective-config', effective, ancestry });
-    await new Promise((resolve) => reservation.close(resolve));
-    child = spawn('/usr/sbin/sshd', ['-D', '-e', '-f', config], {
-      detached: true,
-      env: cleanEnvironment(),
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    closed = false;
-    child.once('close', (code, signal) => {
-      closed = true;
-      events.push({ kind: 'daemon-close', code, signal });
-    });
-    child.stderr.on('data', (data) => {
-      output += data;
-      if (output.length > 1024 * 1024) child.kill();
-    });
-    try {
-      await waitFor(
-        'owned native SSH listener',
-        () => {
-          if (closed) throw new Error('Native SSH daemon refused startup');
+    return group;
+  };
+  const stop = () => {
+    stopPromise ??= (async () => {
+      let group = capture();
+      for (const signal of ['SIGTERM', 'SIGKILL']) {
+        if (group.length) {
           try {
-            const listener = run('/usr/sbin/lsof', [
-              '-nP',
-              '-a',
-              '-p',
-              String(child.pid),
-              `-iTCP:${port}`,
-              '-sTCP:LISTEN',
-            ]);
-            assert.ok(listener.includes(`127.0.0.1:${port}`));
+            process.kill(-child.pid, signal);
+          } catch (error) {
+            if (error.code !== 'ESRCH') throw error;
+          }
+        }
+        if (closed && !group.length) return;
+        await delay(signal === 'SIGTERM' ? 1000 : 250);
+        group = capture();
+      }
+      assert.ok(closed && !group.length, 'SSH child or group closure unproven');
+    })();
+    return stopPromise;
+  };
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const reservation = net.createServer();
+      let config;
+      try {
+        await new Promise((resolve, reject) =>
+          reservation.once('error', reject).listen(0, '127.0.0.1', resolve),
+        );
+        port = reservation.address().port;
+        const fields = {
+          Port: port,
+          ListenAddress: '127.0.0.1',
+          AddressFamily: 'inet',
+          HostKey: join(secret.directory, 'host'),
+          PidFile: join(directory, 'pid'),
+          AuthorizedKeysFile: join(directory, 'authorized'),
+          ForceCommand: `${quote(process.execPath)} ${quote(fileURLToPath(import.meta.url))} --dispatch ${quote(dispatcher)}`,
+          UsePAM: 'no',
+          AuthenticationMethods: 'publickey',
+          PubkeyAuthentication: 'yes',
+          PasswordAuthentication: 'no',
+          KbdInteractiveAuthentication: 'no',
+          GSSAPIAuthentication: 'no',
+          KerberosAuthentication: 'no',
+          HostbasedAuthentication: 'no',
+          PermitRootLogin: 'no',
+          AllowUsers: 'bipo',
+          StrictModes: 'yes',
+          DisableForwarding: 'yes',
+          PermitTTY: 'no',
+          PermitUserRC: 'no',
+          PermitUserEnvironment: 'no',
+          LoginGraceTime: 10,
+          MaxStartups: '2:30:3',
+          SetEnv: `ZDOTDIR=${join(directory, 'zsh')}`,
+          LogLevel: 'VERBOSE',
+        };
+        config = privateFile(
+          join(directory, `server-${attempt}.conf`),
+          Object.entries(fields)
+            .map(([key, value]) => `${key} ${value}\n`)
+            .join(''),
+        );
+        run('/usr/sbin/sshd', ['-t', '-f', config]);
+        const effective = run('/usr/sbin/sshd', ['-T', '-f', config]);
+        const parsed = Object.fromEntries(
+          effective
+            .split('\n')
+            .map((line) => [line.slice(0, line.indexOf(' ')), line.slice(line.indexOf(' ') + 1)]),
+        );
+        for (const [key, value] of Object.entries(fields))
+          assert.equal(
+            parsed[key.toLowerCase()],
+            key === 'ListenAddress' ? `127.0.0.1:${port}` : String(value),
+          );
+        events.push({ kind: 'effective-config', effective, ancestry });
+      } finally {
+        await new Promise((resolve, reject) =>
+          reservation.close((error) => {
+            if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
+            else resolve();
+          }),
+        );
+      }
+      closed = false;
+      failure = undefined;
+      outputBytes = 0;
+      overflow = false;
+      launchIdentity = undefined;
+      stopPromise = undefined;
+      captured = new Map();
+      child = spawn('/usr/sbin/sshd', ['-D', '-e', '-f', config], {
+        detached: true,
+        env: cleanEnvironment(),
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      child.on('error', (error) => {
+        const code = ['ENOENT', 'EACCES'].includes(error?.code) ? error.code : 'UNKNOWN';
+        failure ??= `Native SSH daemon startup failed (${code})`;
+      });
+      child.once('close', (code, signal) => {
+        closed = true;
+        events.push({ kind: 'daemon-close', code, signal });
+      });
+      if (!Number.isSafeInteger(child.pid) || child.pid <= 0) {
+        await waitFor('failed SSH daemon close', () => closed, 1000).catch(() => {});
+        throw new Error('Native SSH daemon has no proven PID');
+      }
+      const original = identity(child.pid);
+      assert.ok(
+        processTree().some(
+          (row) => row.pid === child.pid && row.parent === process.pid && row.group === child.pid,
+        ),
+        'SSH daemon launch ancestry unproven',
+      );
+      captured.set(child.pid, original);
+      launchIdentity = original;
+      child.stderr.on('data', (data) => {
+        if (overflow) return;
+        const remaining = output.length - outputBytes;
+        const accepted = Math.min(data.length, remaining);
+        data.copy(output, outputBytes, 0, accepted);
+        outputBytes += accepted;
+        if (data.length > remaining) {
+          overflow = true;
+          failure ??= 'Native SSH daemon output limit exceeded';
+          events.push({
+            kind: 'daemon-output-limit',
+            retainedBytes: outputBytes,
+            maximumBytes: output.length,
+          });
+          void stop().catch(() => {
+            failure = 'Native SSH daemon closure unproven';
+          });
+        }
+      });
+
+      try {
+        await waitFor(
+          'owned native SSH listener',
+          () => {
+            if (failure) throw new Error(failure);
+            if (closed) throw new Error('Native SSH daemon refused startup');
+            capture();
+            let listener;
+            try {
+              listener = run('/usr/sbin/lsof', [
+                '-nP',
+                '-a',
+                '-p',
+                String(child.pid),
+                `-iTCP:${port}`,
+                '-sTCP:LISTEN',
+              ]);
+            } catch {
+              return false;
+            }
+            assert.ok(
+              /^\s*COMMAND\s+PID\s+USER\s+FD\s+TYPE\s+DEVICE\s+SIZE\/OFF\s+NODE\s+NAME\s*$/.test(
+                listener.split('\n')[0],
+              ),
+              'SSH listener header unproven',
+            );
+            const rows = listener
+              .split('\n')
+              .slice(1)
+              .map((row) => row.trim().split(/\s+/));
+            assert.ok(rows.length > 0, 'SSH listener ownership unproven');
+            assert.ok(
+              rows.every(
+                (row) =>
+                  row.length === 10 &&
+                  /^\d+$/.test(row[1]) &&
+                  Number(row[1]) === child.pid &&
+                  row[4] === 'IPv4' &&
+                  row[7] === 'TCP' &&
+                  row[8] === `127.0.0.1:${port}` &&
+                  row[9] === '(LISTEN)',
+              ),
+              'SSH listener PID or literal address unproven',
+            );
+            capture();
             events.push({ kind: 'listener', pid: child.pid, listener });
             return true;
-          } catch {
-            return false;
-          }
-        },
-        5000,
-      );
-      break;
-    } catch (error) {
-      if (!closed || !output.includes('Address already in use') || attempt === 2) throw error;
+          },
+          5000,
+        );
+        break;
+      } catch (error) {
+        await stop();
+        if (
+          failure ||
+          !closed ||
+          !output.subarray(0, outputBytes).includes('Address already in use') ||
+          attempt === 2
+        )
+          throw error;
+      }
     }
-  }
-  const known = (name, key) =>
-    privateFile(
-      join(directory, name),
-      `[127.0.0.1]:${port} ${readFileSync(join(secret.directory, `${key}.pub`), 'utf8')
-        .split(' ')
-        .slice(0, 2)
-        .join(' ')}\n`,
-    );
-  const good = known('known-hosts', 'host');
-  const wrong = known('wrong-known-hosts', 'wrong-host');
-  function client(name, unauthorized = false, mismatch = false) {
-    return privateFile(
-      join(directory, `${name}.conf`),
-      Object.entries({
-        Host: '127.0.0.1',
-        HostName: '127.0.0.1',
-        Port: port,
-        User: 'bipo',
-        IdentityFile: join(secret.directory, unauthorized ? 'unauthorized' : 'client'),
-        IdentitiesOnly: 'yes',
-        IdentityAgent: 'none',
-        BatchMode: 'yes',
-        StrictHostKeyChecking: 'yes',
-        UserKnownHostsFile: mismatch ? wrong : good,
-        GlobalKnownHostsFile: secret.empty,
-        UpdateHostKeys: 'no',
-        VerifyHostKeyDNS: 'no',
-        ProxyCommand: 'none',
-        ProxyJump: 'none',
-        ControlMaster: 'no',
-        ControlPath: 'none',
-        ClearAllForwardings: 'yes',
-        RequestTTY: 'no',
-        ConnectTimeout: 5,
-        ConnectionAttempts: 1,
-      })
-        .map(([key, value]) => `${key} ${value}\n`)
-        .join(''),
-    );
-  }
-  return {
-    protocol: 'ssh',
-    url: `ssh://bipo@127.0.0.1:${port}${remote}`,
-    port,
-    directory,
-    events,
-    client,
-    control: join(directory, 'control'),
-    observations: () => ({
+    const known = (name, key) =>
+      privateFile(
+        join(directory, name),
+        `[127.0.0.1]:${port} ${readFileSync(join(secret.directory, `${key}.pub`), 'utf8')
+          .split(' ')
+          .slice(0, 2)
+          .join(' ')}\n`,
+      );
+    const good = known('known-hosts', 'host');
+    const wrong = known('wrong-known-hosts', 'wrong-host');
+    function client(name, unauthorized = false, mismatch = false) {
+      return privateFile(
+        join(directory, `${name}.conf`),
+        Object.entries({
+          Host: '127.0.0.1',
+          HostName: '127.0.0.1',
+          Port: port,
+          User: 'bipo',
+          IdentityFile: join(secret.directory, unauthorized ? 'unauthorized' : 'client'),
+          IdentitiesOnly: 'yes',
+          IdentityAgent: 'none',
+          BatchMode: 'yes',
+          StrictHostKeyChecking: 'yes',
+          UserKnownHostsFile: mismatch ? wrong : good,
+          GlobalKnownHostsFile: secret.empty,
+          UpdateHostKeys: 'no',
+          VerifyHostKeyDNS: 'no',
+          ProxyCommand: 'none',
+          ProxyJump: 'none',
+          ControlMaster: 'no',
+          ControlPath: 'none',
+          ClearAllForwardings: 'yes',
+          RequestTTY: 'no',
+          ConnectTimeout: 5,
+          ConnectionAttempts: 1,
+        })
+          .map(([key, value]) => `${key} ${value}\n`)
+          .join(''),
+      );
+    }
+    return {
+      protocol: 'ssh',
+      url: `ssh://bipo@127.0.0.1:${port}${remote}`,
+      port,
+      directory,
       events,
-      authentication: output
-        .split('\n')
-        .filter((line) => /Accepted publickey|Failed publickey|Connection closed/.test(line)),
-      services: existsSync(join(evidence, 'ssh-service.jsonl'))
-        ? readFileSync(join(evidence, 'ssh-service.jsonl'), 'utf8')
-            .trim()
-            .split('\n')
-            .filter(Boolean)
-            .map(JSON.parse)
-        : [],
-    }),
-    async close() {
-      writeFileSync(join(directory, 'control'), 'release', { mode: 0o600 });
-      const group = processTree().filter((item) => item.group === child.pid);
-      assert.ok(
-        group.every((item) => /sshd|node|git|zsh|true/.test(item.command)),
-        'Ambiguous SSH descendants preserved',
-      );
-      if (!closed) process.kill(-child.pid, 'SIGTERM');
-      await waitFor(
-        'SSH descendants closed',
-        () => closed && !processTree().some((item) => item.group === child.pid),
-        10000,
-      );
-      const services = existsSync(join(evidence, 'ssh-service.jsonl'))
-        ? readFileSync(join(evidence, 'ssh-service.jsonl'), 'utf8')
-            .trim()
-            .split('\n')
-            .filter(Boolean)
-            .map(JSON.parse)
-        : [];
-      const started = services.filter((item) => item.kind === 'service-start');
-      await waitFor(
-        'captured SSH dispatchers and service descendants closed',
-        () => {
-          const tree = processTree();
-          return started.every(
-            (item) =>
-              !tree.some(
-                (row) =>
-                  row.pid === item.pid || row.pid === item.childPid || row.group === item.childPid,
-              ),
-          );
-        },
-        10000,
-      );
-      privateFile(join(evidence, 'ssh-daemon.log'), output);
-    },
-  };
+      client,
+      control: join(directory, 'control'),
+      observations: () => ({
+        events,
+        authentication: output
+          .subarray(0, outputBytes)
+          .toString()
+          .split('\n')
+          .filter((line) => /Accepted publickey|Failed publickey|Connection closed/.test(line)),
+        services: existsSync(join(evidence, 'ssh-service.jsonl'))
+          ? readFileSync(join(evidence, 'ssh-service.jsonl'), 'utf8')
+              .trim()
+              .split('\n')
+              .filter(Boolean)
+              .map(JSON.parse)
+          : [],
+      }),
+      async close() {
+        try {
+          writeFileSync(join(directory, 'control'), 'release', { mode: 0o600 });
+        } finally {
+          await stop();
+        }
+        const services = existsSync(join(evidence, 'ssh-service.jsonl'))
+          ? readFileSync(join(evidence, 'ssh-service.jsonl'), 'utf8')
+              .trim()
+              .split('\n')
+              .filter(Boolean)
+              .map(JSON.parse)
+          : [];
+        const started = services.filter((item) => item.kind === 'service-start');
+        await waitFor(
+          'captured SSH dispatchers and service descendants closed',
+          () => {
+            const tree = processTree();
+            return started.every(
+              (item) =>
+                !tree.some(
+                  (row) =>
+                    row.pid === item.pid ||
+                    row.pid === item.childPid ||
+                    row.group === item.childPid,
+                ),
+            );
+          },
+          10000,
+        );
+        privateFile(join(evidence, 'ssh-daemon.log'), output.subarray(0, outputBytes));
+        if (failure) throw new Error('Native SSH daemon capture failed');
+      },
+    };
+  } catch {
+    if (child) {
+      try {
+        await stop();
+      } catch {
+        throw new Error('Native SSH startup failed; private daemon ownership or closure unproven');
+      }
+    }
+    throw new Error('Native SSH startup refused');
+  }
 }
 
 if (process.argv[2] === '--dispatch') {

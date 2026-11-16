@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { before, test } from 'node:test';
 import { spawn } from 'node:child_process';
+import childProcess from 'node:child_process';
+import fileSystem from 'node:fs';
+import net from 'node:net';
+import { syncBuiltinESMExports } from 'node:module';
+import { sshServer } from '../scripts/transportSsh.mjs';
 import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
@@ -358,3 +363,308 @@ test('synchronous launch throw stores only a bounded classification and retains 
   assert.equal(existsSync(owner.temporary), true);
   for (const value of secret.secrets) assert.equal(owner.host.error.includes(value), false);
 });
+
+const sshStartupObservations = [];
+async function sshStartupFixture(t, mode) {
+  const caseNonce = randomBytes(16).toString('hex');
+  const fixture = join(directory, `ssh-startup-${mode}-${caseNonce}`);
+  const keyRoot = join(fixture, `secrets-${caseNonce}`);
+  const evidence = join(fixture, 'public');
+  for (const path of [fixture, keyRoot, evidence]) mkdirSync(path, { mode: 0o700 });
+  for (const name of ['client.pub', 'host.pub', 'wrong-host.pub'])
+    privateFile(join(keyRoot, name), 'ssh-ed25519 synthetic-unit-only');
+  privateFile(join(keyRoot, 'empty'), '');
+  privateFile(join(keyRoot, 'credential'), secret.password);
+  const ready = join(fixture, 'inert-child-ready');
+  const trigger = join(fixture, 'inert-output-trigger');
+  const original = {
+    spawn: childProcess.spawn,
+    execFileSync: childProcess.execFileSync,
+    existsSync: fileSystem.existsSync,
+    createServer: net.createServer,
+    kill: process.kill,
+  };
+  const state = { reservations: [], signals: [], closes: 0, errors: [], spawns: 0, lsof: 0 };
+  let blocker;
+  if (mode === 'listen') {
+    blocker = original.createServer();
+    await new Promise((resolve, reject) =>
+      blocker.once('error', reject).listen(0, '127.0.0.1', resolve),
+    );
+  }
+  t.mock.method(fileSystem, 'existsSync', (path) =>
+    ['/etc/zshenv', '/etc/ssh/sshrc'].includes(path) ? false : original.existsSync(path),
+  );
+  t.mock.method(net, 'createServer', (...args) => {
+    const server = original.createServer(...args);
+    state.reservations.push(server);
+    if (blocker) {
+      const listen = server.listen;
+      t.mock.method(server, 'listen', (_port, _host, callback) =>
+        listen.call(server, blocker.address().port, '127.0.0.1', callback),
+      );
+    }
+    return server;
+  });
+  t.mock.method(childProcess, 'spawn', (command, args, options) => {
+    if (command !== '/usr/sbin/sshd') return original.spawn(command, args, options);
+    state.spawns++;
+    if (mode === 'throw') throw new Error(secret.password);
+    const missing = join(fixture, `command-${caseNonce}`);
+    if (mode === 'EACCES') privateFile(missing, secret.username);
+    state.child = ['ENOENT', 'EACCES'].includes(mode)
+      ? original.spawn(missing, [], options)
+      : original.spawn(
+          process.execPath,
+          [
+            '-e',
+            `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},process.argv.at(-1),{mode:384});${mode === 'overflow' ? `const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(trigger)})){clearInterval(timer);const b=Buffer.alloc(65536,255);for(let i=0;i<40;i++)process.stderr.write(b)}},5);` : ''}setInterval(()=>{},1000)`,
+            caseNonce,
+          ],
+          options,
+        );
+    state.child.once('error', (error) => state.errors.push(error.code));
+    state.child.once('close', () => state.closes++);
+    if (state.child.pid)
+      state.proof = original.execFileSync(
+        '/bin/ps',
+        ['-p', String(state.child.pid), '-o', 'uid=,lstart=,ppid=,pgid='],
+        { encoding: 'utf8', timeout: 1000 },
+      );
+    return state.child;
+  });
+  t.mock.method(childProcess, 'execFileSync', (command, args, options) => {
+    if (command === '/usr/bin/dscl') return 'UserShell: /bin/zsh';
+    if (command === '/usr/sbin/sshd') {
+      if (mode === 'config-t' && args[0] === '-t') throw new Error(secret.password);
+      if (args[0] === '-t') return '';
+      if (mode === 'config-T') throw new Error(secret.password);
+      const configuration = readFileSync(args[2], 'utf8');
+      const port = configuration.match(/^Port (\d+)$/m)[1];
+      return configuration
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const split = line.indexOf(' ');
+          const key = line.slice(0, split).toLowerCase();
+          let value = line.slice(split + 1);
+          if (key === 'listenaddress')
+            value = `${mode === 'config-mismatch' ? '0.0.0.0' : value}:${port}`;
+          return `${key} ${value}`;
+        })
+        .join('\n');
+    }
+    if (command === '/usr/sbin/lsof') {
+      state.lsof++;
+      if (!existsSync(ready)) throw new Error('Inert child readiness pending');
+      state.ready = readFileSync(ready, 'utf8') === caseNonce;
+      const port = args.find((arg) => arg.startsWith('-iTCP:')).slice(6);
+      const pid =
+        mode === 'wrong-pid' || mode === 'changed-identity' ? process.pid : state.child.pid;
+      const address = mode === 'wrong-address' ? '0.0.0.0' : '127.0.0.1';
+      const header = 'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME';
+      const row = `node ${pid} fixture 3u IPv4 0x1 0t0 TCP ${address}:${port} (LISTEN)`;
+      if (mode === 'empty') return header;
+      if (mode === 'headerless')
+        return `node ${process.pid} fixture 4u IPv4 0x1 0t0 TCP 127.0.0.1:${port} (LISTEN)\n${row}`;
+      return `${header}\n${row}${mode === 'mixed' ? `\nnode ${process.pid} fixture 4u IPv4 0x1 0t0 TCP 127.0.0.1:${port} (LISTEN)` : ''}`;
+    }
+    if (
+      mode === 'changed-identity' &&
+      state.ready &&
+      command === '/bin/ps' &&
+      args.includes('uid=,lstart=')
+    )
+      return `${process.getuid()} changed-start-identity`;
+    return original.execFileSync(command, args, options);
+  });
+  t.mock.method(process, 'kill', (pid, signal) => {
+    state.signals.push({ pid, signal });
+    assert.ok(mode !== 'changed-identity', 'Unproven SSH identity must not be signalled');
+    assert.ok(pid === -state.child?.pid, 'Only the captured inert group may be signalled');
+    const current = original.execFileSync(
+      '/bin/ps',
+      ['-p', String(state.child.pid), '-o', 'uid=,lstart=,ppid=,pgid='],
+      { encoding: 'utf8', timeout: 1000 },
+    );
+    assert.ok(current === state.proof, 'Test signal requires unchanged independent child proof');
+    return original.kill(pid, signal);
+  });
+  syncBuiltinESMExports();
+  return {
+    caseNonce,
+    trigger,
+    fixture,
+    keyRoot,
+    evidence,
+    state,
+    async cleanup() {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      for (const server of [...state.reservations, blocker].filter(Boolean))
+        if (server.listening) await new Promise((resolve) => server.close(resolve));
+      if (state.child?.pid && state.closes === 0) {
+        const current = original.execFileSync(
+          '/bin/ps',
+          ['-p', String(state.child.pid), '-o', 'uid=,lstart=,ppid=,pgid='],
+          { encoding: 'utf8', timeout: 1000 },
+        );
+        assert.ok(current === state.proof, 'Private teardown requires unchanged owned child proof');
+        original.kill(-state.child.pid, 'SIGTERM');
+        await waitFor('independent inert child teardown', () => state.closes === 1, 2000);
+      }
+      if (state.child?.pid)
+        assert.ok(
+          !processTree().some((row) => row.group === state.child.pid),
+          'No captured inert child group may remain after teardown',
+        );
+    },
+  };
+}
+
+for (const mode of [
+  'config-t',
+  'config-T',
+  'config-mismatch',
+  'listen',
+  'ENOENT',
+  'EACCES',
+  'throw',
+  'wrong-pid',
+  'wrong-address',
+  'empty',
+  'headerless',
+  'mixed',
+  'owned',
+  'overflow',
+  'changed-identity',
+]) {
+  test(`synthetic SSH startup ${mode} enforces actual socket and inert-child lifetime`, async (t) => {
+    const fixture = await sshStartupFixture(t, mode);
+    const { state } = fixture;
+    const started = Date.now();
+    let server;
+    let rejected = false;
+    let safeFailure = false;
+    try {
+      try {
+        server = await sshServer(
+          { directory: fixture.keyRoot, empty: join(fixture.keyRoot, 'empty') },
+          join(fixture.fixture, 'remote.git'),
+          fixture.evidence,
+          fixture.caseNonce,
+        );
+      } catch (error) {
+        rejected = true;
+        safeFailure =
+          error instanceof Error &&
+          [
+            'Native SSH startup refused',
+            'Native SSH startup failed; private daemon ownership or closure unproven',
+          ].includes(error.message);
+      }
+      assert.ok(
+        rejected === !['owned', 'overflow'].includes(mode),
+        'SSH startup must match the intended ownership result',
+      );
+      assert.ok(
+        !rejected || safeFailure,
+        'SSH startup failure diagnostics must remain fixed and bounded',
+      );
+      assert.ok(state.reservations.length === 1, 'Exactly one owned reservation must be observed');
+      assert.ok(
+        state.reservations.every((socket) => !socket.listening),
+        'Source must close its actual reservation before returning',
+      );
+      const beforeSpawn = ['config-t', 'config-T', 'config-mismatch', 'listen'].includes(mode);
+      assert.ok(
+        state.spawns === (beforeSpawn ? 0 : 1),
+        'Daemon spawn must follow validated closed reservation',
+      );
+      if (['ENOENT', 'EACCES'].includes(mode)) {
+        assert.ok(Date.now() - started < 3000, 'No-PID failure must reject within the short bound');
+        assert.ok(
+          state.errors.length === 1 && state.errors[0] === mode,
+          'Actual failed spawn error must be observed',
+        );
+        assert.ok(
+          state.child.pid === undefined && state.closes === 1,
+          'Actual no-PID child close must be observed',
+        );
+      }
+      if (['owned', 'overflow'].includes(mode)) {
+        assert.ok(state.ready === true, 'Real inert child must prove readiness');
+        assert.ok(
+          server.events.some((event) => event.kind === 'listener' && event.pid === state.child.pid),
+          'Healthy listener metadata must bind the captured actual PID',
+        );
+        if (mode === 'overflow') {
+          privateFile(fixture.trigger, 'emit');
+          await waitFor('actual inert SSH stderr overflow', () => state.closes === 1, 4000);
+          let refused = false;
+          try {
+            await server.close();
+          } catch (error) {
+            refused =
+              error instanceof Error && error.message === 'Native SSH daemon capture failed';
+          }
+          assert.ok(refused, 'Overflow must remain a failed daemon capture after actual close');
+          const limits = server.events.filter((event) => event.kind === 'daemon-output-limit');
+          assert.ok(limits.length === 1, 'Stderr overflow must notify exactly once');
+          assert.ok(
+            limits[0].retainedBytes === 1024 * 1024 && limits[0].maximumBytes === 1024 * 1024,
+            'Daemon output must retain only the fixed actual byte cap',
+          );
+          const bytes = readFileSync(join(fixture.evidence, 'ssh-daemon.log'));
+          assert.ok(
+            bytes.length === 1024 * 1024 && bytes.equals(Buffer.alloc(1024 * 1024, 255)),
+            'Bounded daemon log must preserve exact binary bytes',
+          );
+        } else await server.close();
+      }
+      if (mode === 'changed-identity') {
+        assert.ok(
+          state.ready === true && state.closes === 0,
+          'Unknown identity must preserve the actual live private child',
+        );
+        assert.ok(state.signals.length === 0, 'Unknown identity must not authorize any signal');
+      } else if (state.child?.pid) {
+        assert.ok(
+          state.ready === true && state.closes === 1,
+          'Owned startup failure or normal stop must await actual child close',
+        );
+        assert.ok(
+          !processTree().some((row) => row.group === state.child.pid),
+          'Proven owned child group must be empty',
+        );
+        assert.ok(
+          state.signals.length === 1 && state.signals[0].signal === 'SIGTERM',
+          'Only one proven owned TERM must be needed',
+        );
+      } else assert.ok(state.signals.length === 0, 'No observed owned child means no signal');
+      assert.ok(
+        readFileSync(join(fixture.keyRoot, 'credential'), 'utf8') === secret.password,
+        'SSH startup never deletes private credentials on failure or uncertainty',
+      );
+      sshStartupObservations.push({
+        mode,
+        kind: 'synthetic-metadata-actual-net-and-inert-node-child-only',
+        rejected,
+        safeFailure,
+        reservationClosedBySource: state.reservations.every((socket) => !socket.listening),
+        spawns: state.spawns,
+        actualChildPid: state.child?.pid ?? null,
+        actualErrors: state.errors,
+        closesBeforeIndependentTeardown: state.closes,
+        sourceSignals: state.signals,
+      });
+      writeFileSync(
+        join(directory, 'ssh-startup-observations.json'),
+        JSON.stringify(sshStartupObservations, null, 2),
+        { mode: 0o600 },
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+}
