@@ -149,6 +149,25 @@ const date = (value) =>
   typeof value === 'string' &&
   /^\d{4}-\d\d-\d\dT/.test(value) &&
   Number.isFinite(Date.parse(value));
+const baseCases = [
+  'normal',
+  'concurrency',
+  'linked-worktree',
+  'untrusted',
+  'missing-git',
+  'unsupported-git',
+  'worker-crash',
+  'main-crash',
+];
+const p1Cases = ['p1-changes', 'p1-sync'];
+const knownCases = [...baseCases, ...p1Cases];
+const validCases = (values) =>
+  Array.isArray(values) &&
+  values.length > 0 &&
+  values.length <= knownCases.length &&
+  unique(values) &&
+  values.every((value) => typeof value === 'string' && knownCases.includes(value));
+const sameCases = (a, b) => a.length === b.length && a.every((value) => b.includes(value));
 const producers = ['local-git-v1', 'commit-state-v1', 'git-transports-v1', 'node-test-v1'];
 export const nativeAssertions = Object.freeze({
   'changes.status': {
@@ -289,17 +308,55 @@ function adapter(entry, artifacts, source) {
     requireValue(
       run &&
         run.status === 'pass' &&
-        unique(run.selected) &&
-        unique(run.completed) &&
+        validCases(run.selected) &&
+        validCases(run.completed) &&
         same(run.selected, run.completed),
       'PRODUCER_INCOMPLETE',
+    );
+    requireValue(
+      validCases(entry.caseIds) && sameCases(entry.caseIds, run.selected),
+      'INVALID_CASES',
+    );
+    requireValue(
+      validCases(run.baseScenarios) &&
+        sameCases(run.baseScenarios, baseCases) &&
+        run.fullSuite === sameCases(run.selected, baseCases) &&
+        run.fullBaseSuite === baseCases.every((name) => run.completed.includes(name)) &&
+        run.targetedP1Complete === p1Cases.every((name) => run.completed.includes(name)),
+      'INVALID_SUITE_FLAGS',
     );
     for (const key of ['nonce', 'sessionId', 'sourceDigest'])
       requireValue(run[key] === entry[key], 'FOREIGN_PRODUCER');
     requireValue(same(run.source, source), 'STALE_PRODUCER');
-    const hosts = values.filter((v) => v.launchRecord);
+    const hosts = [...artifacts.values()]
+      .filter((artifact) => artifact.value?.launchRecord)
+      .map((artifact) => ({
+        host: artifact.value,
+        path: relative(entry.sessionRoot, artifact.path).split('/'),
+      }));
     requireValue(hosts.length > 0, 'MISSING_LAUNCHER');
-    for (const host of hosts) {
+    for (const { host, path } of hosts) {
+      const scenario = path[0];
+      requireValue(
+        path.length === 3 &&
+          path[2] === 'launcher-result.json' &&
+          run.selected.includes(scenario) &&
+          run.completed.includes(scenario) &&
+          entry.caseIds.includes(scenario) &&
+          (!p1Cases.includes(scenario) || host.result?.role === scenario),
+        'INVALID_LAUNCHER_CASE',
+      );
+      if (p1Cases.includes(scenario)) {
+        requireValue(Array.isArray(host.result?.assertions), 'INVALID_ASSERTION_CASE');
+        for (const assertion of host.result.assertions)
+          requireValue(
+            assertion &&
+              assertion.caseId === scenario &&
+              (!Object.hasOwn(nativeAssertions, assertion.id) ||
+                nativeAssertions[assertion.id].caseId === scenario),
+            'INVALID_ASSERTION_CASE',
+          );
+      }
       requireValue(
         host.code === 0 &&
           host.signal === null &&
@@ -327,6 +384,10 @@ function adapter(entry, artifacts, source) {
         'FOREIGN_HOST',
       );
     }
+    requireValue(
+      run.selected.every((scenario) => hosts.some(({ path }) => path[0] === scenario)),
+      'MISSING_CASE_LAUNCHER',
+    );
     return { run, hosts };
   }
   if (entry.producer === 'commit-state-v1') {
@@ -500,9 +561,11 @@ export function loadEvidence(indexPath, source, clauses) {
       entry.producer === 'local-git-v1' &&
       ['native-api', 'native-rendered'].includes(proof.kind)
     ) {
-      const assertions = adapted.hosts.flatMap((h) => h.result.assertions ?? []);
+      const assertions = adapted.hosts
+        .filter(({ path }) => path[0] === proof.caseId)
+        .flatMap(({ host }) => host.result.assertions ?? []);
       supported = proof.assertionIds.every((id) => {
-        const spec = nativeAssertions[id],
+        const spec = Object.hasOwn(nativeAssertions, id) ? nativeAssertions[id] : undefined,
           actual = assertions.find((a) => a.id === id);
         if (
           !spec ||
