@@ -175,6 +175,7 @@ export class TransportSession {
         'tests/transportHost.ts',
         'tests/transportScenarios.ts',
         'tests/gitTransports.test.mjs',
+        'tests/transportLifecycle.test.mjs',
         'package.json',
         'README.md',
       ].map((name) => [name, digest(readFileSync(join(root, name)))]),
@@ -318,7 +319,7 @@ export class TransportSession {
       companion: await ensureLocalExtension(root, this.profile, artifact, { env: this.env }),
     });
   }
-  async launch(debug = false) {
+  async launch(debug = false, launchChild = spawn) {
     const host = (this.host = {
       launched: Date.now(),
       closed: false,
@@ -333,28 +334,46 @@ export class TransportSession {
           `--dev-profile=${this.profile.id}`,
           this.workspace,
         ];
-    host.child = spawn(command, args, {
-      cwd: debug ? upstream : root,
-      env: this.env,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    let log;
+    const launchFailure = (error) => {
+      host.launchErrorCode = ['ENOENT', 'EACCES'].includes(error?.code) ? error.code : 'UNKNOWN';
+      host.error ??= `Application launch failed (${host.launchErrorCode})`;
+    };
+    try {
+      host.child = launchChild(command, args, {
+        cwd: debug ? upstream : root,
+        env: this.env,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      host.child.on('error', launchFailure);
+      host.child.once('close', (code, signal) => {
+        host.closed = true;
+        host.exit = { code, signal };
+        log?.close();
+      });
+    } catch (error) {
+      launchFailure(error);
+      throw new Error(host.error);
+    }
+    if (!Number.isSafeInteger(host.child.pid) || host.child.pid <= 0) {
+      await waitFor('failed application child close', () => host.closed, 1000).catch(() => {});
+      host.error ??= 'Application launch failed (PID_UNAVAILABLE)';
+      throw new Error(host.error);
+    }
     host.captured.add(host.child.pid);
-    captureLaunchIdentity(host);
-    const log = boundedHostLog(host, join(this.evidence, 'application.log'), () => {
+    try {
+      captureLaunchIdentity(host);
+    } catch {
+      host.error ??= 'Owned application launch identity unproven';
+      throw new Error(host.error);
+    }
+    log = boundedHostLog(host, join(this.evidence, 'application.log'), () => {
       void this.stopOwnedHost().catch(() => {
         host.error ??= 'Owned application shutdown unproven';
       });
     });
     for (const stream of [host.child.stdout, host.child.stderr]) stream.on('data', log.accept);
-    host.child.on('error', (error) => {
-      host.error ??= error.message;
-    });
-    host.child.on('close', (code, signal) => {
-      host.closed = true;
-      host.exit = { code, signal };
-      log.close();
-    });
     const active = await waitFor('owned transport companion activation', () => {
       if (host.error) throw new Error(host.error);
       const files = readdirSync(this.channel).filter((name) => name.startsWith('activation-'));
@@ -571,7 +590,16 @@ export class TransportSession {
   async cleanup() {
     this.ui?.close();
     if (this.host) {
-      const tree = this.capture();
+      let tree;
+      try {
+        tree = this.capture();
+      } catch {
+        return {
+          processesClosed: false,
+          forced: false,
+          leftovers: [this.profile.path, this.temporary],
+        };
+      }
       write(join(this.evidence, 'cleanup-processes.json'), {
         tree,
         captured: [...this.host.captured],
