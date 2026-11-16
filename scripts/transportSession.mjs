@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
-  createWriteStream,
+  openSync,
+  writeSync,
+  closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -18,12 +21,139 @@ import { root, upstream, prepare } from './upstream.mjs';
 import { developmentProfile, developmentArguments } from './developmentProfile.mjs';
 import { buildLocalArtifact } from './localExtensionArtifact.mjs';
 import { ensureLocalExtension, localEnvironment } from './localExtensionInstall.mjs';
-import { CDP, delay, ownedTarget, processTree, waitFor } from './commitStateUI.mjs';
+import { CDP, delay, ownedTarget, waitFor } from './commitStateUI.mjs';
 import { adapter, environment, git, privatePath } from '../dist/tests/transportGit.js';
 
 export const write = (path, value) =>
   writeFileSync(path, JSON.stringify(value, null, 2), { flag: 'wx', mode: 0o600 });
 const digest = (value) => createHash('sha256').update(value).digest('hex');
+export function boundedHostLog(host, path, onFailure) {
+  const limit = 4 * 1024 * 1024;
+  const tail = 65536;
+  const storage = Buffer.alloc(limit);
+  const descriptor = openSync(path, 'wx', 0o600);
+  let retained = 0;
+  let failed = false;
+  let closed = false;
+  Object.defineProperty(host, 'output', { get: () => storage.subarray(0, retained).toString() });
+  const fail = (message) => {
+    if (failed) return;
+    failed = true;
+    host.error ??= message;
+    try {
+      onFailure();
+    } catch {
+      host.error ??= 'Application capture shutdown failed';
+    }
+  };
+  return {
+    accept(bytes) {
+      if (closed || failed) return;
+      try {
+        const previous = retained;
+        const remaining = limit - retained;
+        const accepted = Math.min(bytes.length, remaining);
+        bytes.copy(storage, retained, 0, accepted);
+        if (accepted) assert.equal(writeSync(descriptor, bytes, 0, accepted, retained), accepted);
+        retained += accepted;
+        if (bytes.length > remaining) {
+          const count = Math.min(bytes.length, tail);
+          if (count < tail) storage.copy(storage, limit - tail, previous - tail + count, previous);
+          bytes.copy(storage, limit - count, bytes.length - count);
+          assert.equal(writeSync(descriptor, storage, limit - tail, tail, limit - tail), tail);
+          host.logOverflow = true;
+          fail('Application output limit exceeded');
+        }
+      } catch {
+        fail('Application log capture failed');
+      }
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      try {
+        closeSync(descriptor);
+      } catch {
+        fail('Application log close failed');
+      }
+    },
+    statistics: () => ({
+      retainedBytes: retained,
+      maximumBytes: limit,
+      tailBytes: failed ? Math.min(retained, tail) : 0,
+      closed,
+    }),
+  };
+}
+
+export function cloneTargetInventory(root) {
+  const queue = [{ path: root, relative: '', depth: 0 }];
+  const inventory = [];
+  while (queue.length) {
+    assert.ok(inventory.length < 128);
+    const item = queue.pop();
+    assert.ok(item.depth <= 8);
+    const info = lstatSync(item.path);
+    privatePath(item.path, info.isDirectory());
+    assert.ok(Number.isSafeInteger(info.dev) && Number.isSafeInteger(info.ino));
+    assert.ok(info.size <= 1024 * 1024);
+    inventory.push({
+      relative: item.relative,
+      device: info.dev,
+      inode: info.ino,
+      mode: info.mode,
+      uid: info.uid,
+      gid: info.gid,
+      mtimeMs: info.mtimeMs,
+      ctimeMs: info.ctimeMs,
+      sha256: info.isFile() ? digest(readFileSync(item.path)) : null,
+    });
+    if (info.isDirectory())
+      for (const name of readdirSync(item.path))
+        queue.push({
+          path: join(item.path, name),
+          relative: join(item.relative, name),
+          depth: item.depth + 1,
+        });
+  }
+  return inventory.sort((a, b) => a.relative.localeCompare(b.relative));
+}
+
+function hostIdentities() {
+  return execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,pgid=,uid=,lstart=,comm='], {
+    encoding: 'utf8',
+    timeout: 1000,
+    maxBuffer: 1024 * 1024,
+  })
+    .trim()
+    .split('\n')
+    .map((line) => {
+      const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(-?\d+)\s+(.{24})\s+(.+)$/);
+      assert.ok(match, 'Owned application identity unproven');
+      return {
+        pid: +match[1],
+        parent: +match[2],
+        group: +match[3],
+        uid: +match[4],
+        start: match[5],
+        command: match[6],
+      };
+    });
+}
+export function captureLaunchIdentity(host) {
+  const identity = hostIdentities().find((row) => row.pid === host.child.pid);
+  assert.ok(
+    identity &&
+      identity.parent === process.pid &&
+      identity.uid === process.getuid() &&
+      identity.group === host.child.pid,
+    'Owned application launch identity unproven',
+  );
+  host.launchIdentity = identity;
+  host.identities = new Map([[identity.pid, identity]]);
+  return identity;
+}
+
 export class TransportSession {
   constructor(parent, endpoint, secret, remote, options = {}) {
     assert.ok(parent && isAbsolute(parent));
@@ -106,6 +236,37 @@ export class TransportSession {
       adapter: this.adapter,
     });
   }
+  occupyCloneTarget() {
+    const path = join(
+      this.clones,
+      basename(new URL(this.fixture.url).pathname).replace(/\.git$/, ''),
+    );
+    mkdirSync(path, { mode: 0o700 });
+    mkdirSync(join(path, 'nested'), { mode: 0o700 });
+    writeFileSync(join(path, 'existing.txt'), `existing target ${this.nonce}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    writeFileSync(
+      join(path, 'nested/binary'),
+      Buffer.from(Array.from({ length: 256 }, (_, index) => index)),
+      { flag: 'wx', mode: 0o600 },
+    );
+    this.occupiedTarget = { path, before: cloneTargetInventory(path) };
+    return this.occupiedTarget;
+  }
+  cloneInvocation() {
+    if (!existsSync(this.adapter.log)) return;
+    privatePath(this.adapter.log);
+    const bytes = readFileSync(this.adapter.log);
+    assert.ok(bytes.length <= 1024 * 1024);
+    return bytes
+      .toString()
+      .split('\n')
+      .slice(0, -1)
+      .map(JSON.parse)
+      .find((item) => item.argv[0] === 'clone' && item.argv[1] === this.fixture.url);
+  }
   async install() {
     const bootstrap = await ensureLocalExtension(root, this.profile, buildLocalArtifact(root), {
       env: this.env,
@@ -160,7 +321,6 @@ export class TransportSession {
   async launch(debug = false) {
     const host = (this.host = {
       launched: Date.now(),
-      output: '',
       closed: false,
       captured: new Set(),
     });
@@ -173,10 +333,6 @@ export class TransportSession {
           `--dev-profile=${this.profile.id}`,
           this.workspace,
         ];
-    const log = createWriteStream(join(this.evidence, 'application.log'), {
-      flags: 'wx',
-      mode: 0o600,
-    });
     host.child = spawn(command, args, {
       cwd: debug ? upstream : root,
       env: this.env,
@@ -184,19 +340,20 @@ export class TransportSession {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     host.captured.add(host.child.pid);
-    for (const stream of [host.child.stdout, host.child.stderr])
-      stream.on('data', (bytes) => {
-        host.output += bytes;
-        log.write(bytes);
-        if (host.output.length > 4 * 1024 * 1024) host.error = 'Oversized application log';
+    captureLaunchIdentity(host);
+    const log = boundedHostLog(host, join(this.evidence, 'application.log'), () => {
+      void this.stopOwnedHost().catch(() => {
+        host.error ??= 'Owned application shutdown unproven';
       });
+    });
+    for (const stream of [host.child.stdout, host.child.stderr]) stream.on('data', log.accept);
     host.child.on('error', (error) => {
-      host.error = error.message;
+      host.error ??= error.message;
     });
     host.child.on('close', (code, signal) => {
       host.closed = true;
       host.exit = { code, signal };
-      log.end();
+      log.close();
     });
     const active = await waitFor('owned transport companion activation', () => {
       if (host.error) throw new Error(host.error);
@@ -212,6 +369,31 @@ export class TransportSession {
     assert.ok(active.started >= host.launched);
     host.mainPid = active.mainPid;
     this.active = active;
+    const actualArgs = execFileSync('/bin/ps', ['-p', String(active.mainPid), '-o', 'args='], {
+      encoding: 'utf8',
+    });
+    assert.equal(actualArgs.includes('--remote-debugging-port'), debug);
+    for (const flag of ['--extensionDevelopmentPath', '--extensionTestsPath'])
+      assert.equal(actualArgs.includes(flag), false);
+    assert.ok(
+      actualArgs.includes(this.workspace) && actualArgs.includes(this.profile.userData),
+      'Foreign application launch arguments',
+    );
+    const mainIdentity = hostIdentities().find((row) => row.pid === active.mainPid);
+    assert.ok(
+      mainIdentity &&
+        mainIdentity.uid === process.getuid() &&
+        mainIdentity.group === host.child.pid,
+    );
+    const previousMain = host.identities.get(mainIdentity.pid);
+    if (previousMain)
+      assert.ok(
+        previousMain.start === mainIdentity.start &&
+          previousMain.uid === mainIdentity.uid &&
+          previousMain.group === mainIdentity.group,
+        'Application main identity changed',
+      );
+    host.identities.set(mainIdentity.pid, mainIdentity);
     const tree = this.capture();
     assert.ok(
       tree.some(
@@ -222,12 +404,6 @@ export class TransportSession {
       ),
     );
     assert.ok(tree.some((row) => row.pid === active.extensionHostPid));
-    const actualArgs = execFileSync('/bin/ps', ['-p', String(active.mainPid), '-o', 'args='], {
-      encoding: 'utf8',
-    });
-    assert.equal(actualArgs.includes('--remote-debugging-port'), debug);
-    for (const flag of ['--extensionDevelopmentPath', '--extensionTestsPath'])
-      assert.equal(actualArgs.includes(flag), false);
     write(join(this.evidence, 'activation-owned.json'), { active, tree, actualArgs });
     if (debug) {
       const endpoint = await ownedTarget(host, this.profile, this.nonce);
@@ -237,13 +413,44 @@ export class TransportSession {
     return active;
   }
   capture() {
-    const tree = processTree();
-    for (const row of tree) if (row.group === this.host.child.pid) this.host.captured.add(row.pid);
-    return tree.filter(
-      (row) => row.group === this.host.child.pid || this.host.captured.has(row.pid),
+    const host = this.host;
+    assert.ok(host.launchIdentity && host.identities, 'Owned application launch identity unproven');
+    const tree = hostIdentities();
+    const byPid = new Map(tree.map((row) => [row.pid, row]));
+    const owned = new Set();
+    for (const previous of host.identities.values()) {
+      const current = byPid.get(previous.pid);
+      if (!current) continue;
+      assert.ok(
+        current.uid === previous.uid &&
+          current.start === previous.start &&
+          current.group === previous.group,
+        'Owned application PID identity changed',
+      );
+      owned.add(current.pid);
+    }
+    const group = tree.filter((row) => row.group === host.child.pid);
+    let progress = true;
+    while (progress) {
+      progress = false;
+      for (const row of group) {
+        assert.equal(row.uid, process.getuid(), 'Foreign application group owner');
+        if (!owned.has(row.pid) && owned.has(row.parent)) {
+          owned.add(row.pid);
+          host.identities.set(row.pid, row);
+          progress = true;
+        }
+      }
+    }
+    assert.ok(
+      group.every((row) => owned.has(row.pid)),
+      'Unproven application group member',
     );
+    for (const row of group) host.captured.add(row.pid);
+    return tree.filter((row) => owned.has(row.pid));
   }
   async stage(action) {
+    if (this.host.error) throw new Error(this.host.error);
     const sequence = ++this.sequence;
     const stage = `${sequence}-${action}`;
     const request = {
@@ -259,6 +466,7 @@ export class TransportSession {
     const value = await waitFor(
       stage,
       () => {
+        if (this.host.error) throw new Error(this.host.error);
         const path = join(this.channel, `result-${stage}.json`);
         return existsSync(path) && JSON.parse(readFileSync(path, 'utf8'));
       },
@@ -272,6 +480,7 @@ export class TransportSession {
     for (const key of ['storageUri', 'globalStorageUri'])
       assert.ok(value[key].startsWith(`${this.profile.userData}/`));
     assert.equal(value.status, 'pass', value.error);
+    if (this.host.error) throw new Error(this.host.error);
     return value.data;
   }
   async settled() {
@@ -326,39 +535,57 @@ export class TransportSession {
     );
     assert.deepEqual(this.host.exit, { code: 0, signal: null });
   }
+  async stopOwnedHost() {
+    const host = this.host;
+    if (host.stopPromise) return host.stopPromise;
+    host.stopPromise = (async () => {
+      let forced = false;
+      try {
+        let tree = this.capture();
+        if (tree.some((row) => row.group !== host.child.pid || !host.captured.has(row.pid)))
+          return { processesClosed: false, forced: false };
+        forced = tree.length > 0;
+        for (const signal of ['SIGTERM', 'SIGKILL']) {
+          if (tree.length) {
+            try {
+              process.kill(-host.child.pid, signal);
+            } catch (error) {
+              if (error.code !== 'ESRCH') throw error;
+            }
+          }
+          if (!tree.length && host.closed) break;
+          await delay(signal === 'SIGTERM' ? 1000 : 250);
+          tree = this.capture();
+          if (tree.some((row) => row.group !== host.child.pid || !host.captured.has(row.pid)))
+            return { processesClosed: false, forced };
+        }
+        return { processesClosed: host.closed && tree.length === 0, forced };
+      } catch (error) {
+        host.stopError =
+          error instanceof Error ? error.message : 'Owned application identity unproven';
+        return { processesClosed: false, forced };
+      }
+    })();
+    return host.stopPromise;
+  }
   async cleanup() {
-    const leftovers = [];
     this.ui?.close();
     if (this.host) {
-      let tree = this.capture();
+      const tree = this.capture();
       write(join(this.evidence, 'cleanup-processes.json'), {
         tree,
         captured: [...this.host.captured],
         closed: this.host.closed,
       });
-      if (tree.length) {
-        if (
-          tree.some((row) => row.group !== this.host.child.pid || !this.host.captured.has(row.pid))
-        )
-          return { forced: false, leftovers: [this.profile.path, this.temporary] };
-        for (const signal of ['SIGTERM', 'SIGKILL']) {
-          if (tree.length) {
-            try {
-              process.kill(-this.host.child.pid, signal);
-            } catch (error) {
-              if (error.code !== 'ESRCH') throw error;
-            }
-          }
-          await delay(signal === 'SIGTERM' ? 1000 : 250);
-          tree = this.capture();
-        }
-        leftovers.push('forced-native-shutdown');
-      }
-      if (tree.length || !this.host.closed)
-        return { forced: true, leftovers: [this.profile.path, this.temporary] };
+      const stopped = await this.stopOwnedHost();
+      if (!stopped.processesClosed)
+        return { ...stopped, leftovers: [this.profile.path, this.temporary] };
+      this.forced = stopped.forced;
     }
     assert.equal(readFileSync(join(this.sentinel, 'sentinel.txt'), 'utf8'), this.nonce);
     assert.equal(readFileSync(this.parentSentinel, 'utf8'), this.nonce);
+    if (this.occupiedTarget)
+      assert.deepEqual(cloneTargetInventory(this.occupiedTarget.path), this.occupiedTarget.before);
     for (const [path, hash] of Object.entries(this.adapter.hashes))
       assert.equal(digest(readFileSync(path)), hash);
     for (const [path, marker] of [
@@ -377,6 +604,6 @@ export class TransportSession {
     );
     rmSync(this.profile.path, { recursive: true });
     rmSync(this.temporary, { recursive: true });
-    return { forced: leftovers.length > 0, leftovers };
+    return { processesClosed: true, forced: this.forced ?? false, leftovers: [] };
   }
 }

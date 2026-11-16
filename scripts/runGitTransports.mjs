@@ -7,15 +7,16 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { credentials, privateFile } from './transportCredentials.mjs';
+import { credentials, privateFile, owned } from './transportCredentials.mjs';
 import { httpsServer } from './transportHttps.mjs';
 import { sshServer } from './transportSsh.mjs';
-import { TransportSession, write } from './transportSession.mjs';
+import { TransportSession, write, cloneTargetInventory } from './transportSession.mjs';
 import { waitFor } from './commitStateUI.mjs';
 import { git, setup, peerCommit, references } from '../dist/tests/transportGit.js';
 
@@ -56,6 +57,51 @@ export function scanPublicEvidence(root, secrets, privateRoot) {
     }
   }
   return { scannedFiles, skippedPrivateRoots };
+}
+
+export function publishCaseEvidence({
+  record,
+  directory,
+  secret,
+  appCleanup,
+  serverClosed,
+  preserve,
+}) {
+  try {
+    if (record.sessionEvidence)
+      record.evidencePrivacy = scanPublicEvidence(
+        record.sessionEvidence,
+        secret.secrets,
+        secret.directory,
+      );
+    const exported = JSON.stringify(record);
+    if (
+      secret.secrets.some((value) => exported.includes(value)) ||
+      exported.includes('PRIVATE KEY')
+    )
+      throw Object.assign(new Error('PUBLIC_EVIDENCE_SENSITIVE'), {
+        code: 'PUBLIC_EVIDENCE_SENSITIVE',
+      });
+    write(join(directory, 'case-result.json'), record);
+  } finally {
+    if (
+      serverClosed &&
+      appCleanup?.processesClosed === true &&
+      appCleanup.leftovers?.length === 0 &&
+      !preserve
+    ) {
+      try {
+        assert.match(record.nonce, /^[a-f0-9]{32}$/);
+        owned(directory, true);
+        owned(secret.directory, true);
+        assert.equal(secret.directory, join(realpathSync(directory), `secrets-${record.nonce}`));
+        assert.equal(realpathSync(secret.directory), secret.directory);
+      } catch {
+        throw Object.assign(new Error('SECRET_ROOT_UNSAFE'), { code: 'SECRET_ROOT_UNSAFE' });
+      }
+      rmSync(secret.directory, { recursive: true });
+    }
+  }
 }
 
 async function main() {
@@ -123,8 +169,9 @@ async function main() {
         );
       session = new TransportSession(directory, server, secret, fixture.remote, options);
       record.sessionEvidence = session.evidence;
+      const occupied = name.startsWith('occupied-') ? session.occupyCloneTarget() : null;
       await session.install();
-      await session.launch(name === 'cancel-ui');
+      await session.launch(name === 'cancel-ui' || name === 'occupied-ui');
       const beforeRefs = references(fixture.remote);
       if (name === 'chunked-push') {
         await session.stage('connect');
@@ -270,7 +317,7 @@ async function main() {
         }
       } else {
         const action =
-          name.startsWith('cancel') || name === 'interrupt-clone'
+          occupied || name.startsWith('cancel') || name === 'interrupt-clone'
             ? 'clone'
             : name === 'interrupt-fetch'
               ? 'fetch'
@@ -283,6 +330,7 @@ async function main() {
         const before = await session.stage('read');
         const previous = git(fixture.remote, ['rev-parse', 'refs/heads/main']);
         const post = name === 'push-post-ref';
+        let occupiedRefusal;
         if (post) {
           const ready = join(directory, 'post-update-ready');
           const release = join(directory, 'post-update-release');
@@ -306,55 +354,117 @@ async function main() {
         } else {
           control('hold');
           await session.stage(action);
-          await waitFor(
-            'authenticated held native transfer',
-            () => services().some((event) => event.kind === 'held'),
-            10000,
-          );
-          if (action === 'clone') {
-            const destination = join(
-              session.clones,
-              basename(new URL(server.url).pathname).replace(/\.git$/, ''),
+          if (occupied) {
+            const outcome = await waitFor(
+              'occupied target held transfer or specific refusal',
+              async () => {
+                const value = await session.stage('read');
+                return services().some((event) => event.kind === 'held')
+                  ? { held: true }
+                  : value.operation?.state === 'done'
+                    ? { value }
+                    : null;
+              },
+              10000,
             );
+            occupiedRefusal = outcome.value;
+            if (occupiedRefusal)
+              assert.match(
+                occupiedRefusal.operation.error ?? '',
+                /already exists.*not an empty directory/s,
+              );
+          } else
+            await waitFor(
+              'authenticated held native transfer',
+              () => services().some((event) => event.kind === 'held'),
+              10000,
+            );
+          if (action === 'clone' && !occupiedRefusal) {
+            const invocation = await waitFor(
+              'actual native clone argv',
+              () => session.cloneInvocation(),
+              3000,
+            );
+            assert.ok(Number.isSafeInteger(invocation.pid) && invocation.pid > 1);
+            const destination = invocation.argv[2];
+            assert.equal(dirname(destination), session.clones);
+            if (occupied) assert.notEqual(destination, occupied.path);
             await waitFor(
               'actual partial clone .git',
               () => existsSync(join(destination, '.git')),
               5000,
             );
+            record.nativeClone = { ...invocation, destination };
           }
-          const during = await session.stage('read');
-          record.observations.push({ during });
-          if (name === 'cancel-api') await session.stage('cancel');
-          else if (name === 'cancel-ui') await session.cancelUI();
-          else control('disconnect');
-          if (name.startsWith('cancel')) control('release');
+          if (occupiedRefusal) {
+            control('release');
+            same(before, occupiedRefusal);
+            assert.equal(references(fixture.remote), beforeRefs);
+            const afterInventory = cloneTargetInventory(occupied.path);
+            assert.deepEqual(afterInventory, occupied.before);
+            record.observations.push({
+              occupiedTarget: { ...occupied, after: afterInventory },
+              classification: 'occupied-target-refused-before-transfer',
+              outcome: occupiedRefusal,
+            });
+          }
+          if (!occupiedRefusal) {
+            const during = await session.stage('read');
+            record.observations.push({ during });
+            if (name === 'cancel-api' || name === 'occupied-api') await session.stage('cancel');
+            else if (name === 'cancel-ui' || name === 'occupied-ui') await session.cancelUI();
+            else control('disconnect');
+            if (name.startsWith('cancel') || occupied) control('release');
+          }
         }
-        const after = await session.settled();
-        assert.ok(after.operation.error, 'Interrupted operation must reject');
-        assert.doesNotMatch(
-          after.operation.error,
-          /Authentication failed|Permission denied.*publickey|SSL certificate|Host key verification/i,
-        );
-        same(before, after);
-        const actual = git(fixture.remote, ['rev-parse', 'refs/heads/main']);
-        assert.equal(actual, post ? before.state.head : previous);
-        assert.equal(references(fixture.remote), `${actual} refs/heads/main`);
-        if (name.startsWith('cancel')) {
-          assert.match(after.operation.error, /quarantined/);
-          const journal = JSON.parse(readFileSync(join(session.runtime, 'ownership.json'), 'utf8'));
-          assert.equal(journal.record.state, 'quarantined');
-          await session.stage('refused-write');
-          record.observations.push({ journal });
+        if (!occupiedRefusal) {
+          const after = await session.settled();
+          assert.ok(after.operation.error, 'Interrupted operation must reject');
+          assert.doesNotMatch(
+            after.operation.error,
+            /Authentication failed|Permission denied.*publickey|SSL certificate|Host key verification/i,
+          );
+          same(before, after);
+          const actual = git(fixture.remote, ['rev-parse', 'refs/heads/main']);
+          assert.equal(actual, post ? before.state.head : previous);
+          assert.equal(references(fixture.remote), `${actual} refs/heads/main`);
+          if (name.startsWith('cancel') || occupied) {
+            assert.match(after.operation.error, /quarantined/);
+            const journal = JSON.parse(
+              readFileSync(join(session.runtime, 'ownership.json'), 'utf8'),
+            );
+            assert.equal(journal.record.state, 'quarantined');
+            await session.stage('refused-write');
+            record.observations.push({ journal });
+          }
+          if (occupied) {
+            const afterInventory = cloneTargetInventory(occupied.path);
+            assert.deepEqual(afterInventory, occupied.before);
+            record.observations.push({
+              occupiedTarget: { ...occupied, after: afterInventory },
+              classification: 'occupied-target-preserved-native-relocation-then-cancelled',
+              cancellation: name === 'occupied-ui' ? 'physical-ui' : 'native-api',
+              relocatedDestination: record.nativeClone.destination,
+              relocatedDisposition: existsSync(record.nativeClone.destination)
+                ? 'preserved-incomplete'
+                : 'native-cleaned',
+            });
+          }
+          record.observations.push({
+            before,
+            after,
+            remoteBefore: previous,
+            remoteAfter: actual,
+            classification: post ? 'committed-but-unacknowledged' : 'interrupted-before-ref-update',
+            partialDestination:
+              action === 'clone'
+                ? existsSync(record.nativeClone.destination)
+                  ? 'preserved-incomplete'
+                  : 'native-cleaned'
+                : null,
+          });
+          preserve = protocol === 'https';
         }
-        record.observations.push({
-          before,
-          after,
-          remoteBefore: previous,
-          remoteAfter: actual,
-          classification: post ? 'committed-but-unacknowledged' : 'interrupted-before-ref-update',
-          partialDestination: after.destinationExists ? 'preserved-incomplete' : 'native-cleaned',
-        });
-        preserve = protocol === 'https';
       }
       await session.quit();
       record.status = 'pass';
@@ -385,18 +495,14 @@ async function main() {
             : { ...server.observations(), closure };
       }
       record.finished = Date.now();
-      if (session)
-        record.evidencePrivacy = scanPublicEvidence(
-          session.evidence,
-          secret.secrets,
-          secret.directory,
-        );
-      const exported = JSON.stringify(record);
-      for (const value of secret.secrets)
-        assert.equal(exported.includes(value), false, 'Sensitive evidence blocked');
-      assert.equal(exported.includes('PRIVATE KEY'), false);
-      write(join(directory, 'case-result.json'), record);
-      if (!preserve && closure === 'closed') rmSync(secret.directory, { recursive: true });
+      publishCaseEvidence({
+        record,
+        directory,
+        secret,
+        appCleanup: record.cleanup ?? { processesClosed: !session, leftovers: [] },
+        serverClosed: closure === 'closed',
+        preserve,
+      });
       result.cases.push({
         protocol,
         name,
@@ -421,6 +527,8 @@ async function main() {
       for (const name of [
         'cancel-api',
         'cancel-ui',
+        'occupied-api',
+        'occupied-ui',
         'interrupt-clone',
         'interrupt-fetch',
         'interrupt-pull',
@@ -429,6 +537,7 @@ async function main() {
       ])
         await runCase(protocol, name);
     }
+    assert.equal(result.completed.length, 29);
     result.status = 'pass';
   } catch (error) {
     result.error = error instanceof Error ? error.stack : String(error);
