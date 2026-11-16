@@ -1,4 +1,7 @@
-import { spawn, execFileSync } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { launchOwned } from './localGitSession.mjs';
+import { observePresentation } from './localGitPresentation.mjs';
+import { sourceBinding, digest } from './p1CoverageEvidence.mjs';
 import {
   mkdtempSync,
   mkdirSync,
@@ -6,7 +9,7 @@ import {
   readFileSync,
   existsSync,
   rmSync,
-  createWriteStream,
+  realpathSync,
   cpSync,
 } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
@@ -19,6 +22,7 @@ const {
   snapshot,
   configureScenario,
   prepareConcurrent,
+  git,
 } = require('../dist/tests/localGitFixtures.js');
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 async function wait(path) {
@@ -39,7 +43,7 @@ function launch(
 ) {
   const ownEvidence = join(evidence, profile);
   mkdirSync(ownEvidence);
-  const userData = join(temporary, `profile-${profile}`);
+  const userData = join(realpathSync(temporary), `p-${nonce}-${profile}`);
   mkdirSync(join(userData, 'User'), { recursive: true });
   writeFileSync(
     join(userData, 'User/settings.json'),
@@ -51,15 +55,17 @@ function launch(
       'chat.disableAIFeatures': true,
       'security.workspace.trust.enabled': profile !== 'untrusted' ? false : true,
       'git.autofetch': false,
+      ...(profile === 'missing' ? {} : { 'git.path': join(temporary, 'fixture-git') }),
+      'window.title': `P1 ${nonce}`,
+      'git.confirmEmptyCommits': false,
       'git.confirmSync': false,
       'git.postCommitCommand': 'none',
       ...(profile === 'unsupported' ? { 'git.path': join(temporary, 'old-git') } : {}),
     }),
   );
-  const log = createWriteStream(join(ownEvidence, 'host.log'), { flags: 'wx' });
-  const child = spawn(
-    join(upstream, 'scripts/code.sh'),
-    [
+  const host = launchOwned({
+    command: join(upstream, 'scripts/code.sh'),
+    args: [
       repositoryPath,
       `--user-data-dir=${userData}`,
       `--extensions-dir=${join(temporary, `extensions-${profile}`)}`,
@@ -77,54 +83,48 @@ function launch(
         'vscode.github-authentication',
         'vscode.microsoft-authentication',
       ].map((id) => `--disable-extension=${id}`),
+      ...(scenario.startsWith('p1-') ? ['--remote-debugging-port=0'] : []),
     ],
-    {
-      cwd: upstream,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PATH: profile === 'missing' ? join(temporary, 'no-git-bin') : process.env.PATH,
-        VSCODE_DEV: '1',
-        VSCODE_SKIP_PRELAUNCH: '1',
-        DEVLOOM_EVIDENCE_DIR: ownEvidence,
-        DEVLOOM_GIT_FIXTURE: temporary,
-        DEVLOOM_GIT_TEST_DIRECTORY: runtime,
-        DEVLOOM_GIT_PROFILE: profile,
-        DEVLOOM_GIT_REPOSITORY: repositoryPath,
-        DEVLOOM_GIT_SCENARIO: scenario,
-      },
+    cwd: upstream,
+    env: {
+      ...process.env,
+      PATH: profile === 'missing' ? join(temporary, 'no-git-bin') : process.env.PATH,
+      VSCODE_DEV: '1',
+      VSCODE_SKIP_PRELAUNCH: '1',
+      DEVLOOM_EVIDENCE_DIR: ownEvidence,
+      DEVLOOM_GIT_FIXTURE: temporary,
+      DEVLOOM_GIT_TEST_DIRECTORY: runtime,
+      DEVLOOM_GIT_PROFILE: profile,
+      DEVLOOM_GIT_REPOSITORY: repositoryPath,
+      DEVLOOM_GIT_SCENARIO: scenario,
+      DEVLOOM_GIT_NONCE: nonce,
+      DEVLOOM_GIT_SESSION: sessionId,
+      DEVLOOM_GIT_SOURCE_DIGEST: sourceDigest,
     },
-  );
-  child.stdout.pipe(log, { end: false });
-  child.stderr.pipe(log, { end: false });
-  const completion = new Promise((done, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      log.end();
-      const path = join(ownEvidence, 'result.json');
-      const result = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
-      writeFileSync(
-        join(ownEvidence, 'launcher-result.json'),
-        JSON.stringify({ pid: child.pid, code, signal, result }, null, 2),
-      );
-      done({ code, signal, result });
-    });
+    fixtureRoot: temporary,
+    profile: userData,
+    nonce,
+    sessionId: `${sessionId}-${profile}`,
+    sourceRoot: root,
+    evidence: ownEvidence,
+    timeoutMs: scenario.startsWith('p1-') ? 180000 : 100000,
   });
-  return { child, completion };
+  if (scenario.startsWith('p1-'))
+    host.presentation = observePresentation(host, ownEvidence, { nonce, sessionId, sourceDigest });
+  return host;
 }
-async function group(evidence, concurrent, profile = 'normal', alias = false, crash = '') {
-  const temporary = mkdtempSync('/tmp/dlg-fixture-');
-  const runtime = mkdtempSync('/tmp/dlg-runtime-');
+async function group(evidence, concurrent, profile = 'normal', alias = false, crash = '', p1 = '') {
+  const temporary = realpathSync(mkdtempSync('/tmp/dlg-fixture-'));
+  const marker = join(temporary, '.fixture-owner.json');
+  writeFileSync(marker, JSON.stringify({ nonce, sessionId }), { flag: 'wx', mode: 0o600 });
+  const runtime = realpathSync(mkdtempSync('/tmp/dlg-runtime-'));
+  writeFileSync(join(runtime, '.fixture-owner.json'), JSON.stringify({ nonce, sessionId }), {
+    flag: 'wx',
+    mode: 0o600,
+  });
   const hosts = [];
-  const terminate = () => {
-    for (const host of hosts) {
-      try {
-        process.kill(-host.child.pid, 'SIGKILL');
-      } catch {}
-    }
-  };
-  const timer = setTimeout(terminate, 100000);
+  const terminate = () => Promise.all(hosts.map((host) => host.terminate()));
+  const timer = setTimeout(() => void terminate(), p1 ? 180000 : 100000);
   try {
     setupFixture(temporary);
     if (concurrent) {
@@ -148,10 +148,7 @@ async function group(evidence, concurrent, profile = 'normal', alias = false, cr
       writeFileSync(join(temporary, 'go-b'), 'go');
       await wait(join(temporary, 'requested-b'));
       await delay(500);
-      const heldIndex = execFileSync('git', ['show', ':fixture.txt'], {
-        cwd: second,
-        encoding: 'utf8',
-      });
+      const heldIndex = git(second, ['show', ':fixture.txt']);
       if ((alias || crash) && existsSync(join(evidence, 'b/result.json')))
         throw new Error('Second host completed while first hook held the lease');
       writeFileSync(
@@ -169,14 +166,27 @@ async function group(evidence, concurrent, profile = 'normal', alias = false, cr
       if (crash) {
         const ownership = JSON.parse(readFileSync(join(runtime, 'ownership.json'), 'utf8')).record;
         writeFileSync(join(evidence, 'before-crash.json'), JSON.stringify(ownership, null, 2));
-        process.kill(crash === 'worker-crash' ? ownership.clientPid : ownership.mainPid, 'SIGKILL');
+        const victim = hosts[0].captureVictim(
+          crash === 'worker-crash' ? ownership.clientPid : ownership.mainPid,
+        );
+        if (!hosts[0].crash(victim)) throw new Error('Owned crash authorization failed');
         await delay(300);
         writeFileSync(join(temporary, 'crashed'), 'crashed');
       }
       writeFileSync(join(temporary, 'release'), String(Date.now()));
     } else {
       configureScenario(temporary, profile);
-      hosts.push(launch(temporary, evidence, runtime, profile, 'localGitHost'));
+      hosts.push(
+        launch(
+          temporary,
+          evidence,
+          runtime,
+          profile,
+          p1 ? 'localGitP1Host' : 'localGitHost',
+          join(temporary, 'repository'),
+          p1 || 'shared',
+        ),
+      );
     }
     const results = crash
       ? [await hosts[1].completion]
@@ -214,18 +224,51 @@ async function group(evidence, concurrent, profile = 'normal', alias = false, cr
         ),
       );
     }
-    if (results.some((item) => item.code !== 0 || item.result?.status !== 'pass'))
+    if (
+      results.some(
+        (item) => item.status !== 'pass' || item.code !== 0 || item.result?.status !== 'pass',
+      )
+    )
       throw new Error(`Actual Git host failed: ${evidence}`);
   } finally {
     clearTimeout(timer);
-    terminate();
+    const cleanup = await terminate();
     await Promise.allSettled(hosts.map((host) => host.completion));
-    await delay(100);
-    rmSync(temporary, { recursive: true, force: true });
-    rmSync(runtime, { recursive: true, force: true });
+    await Promise.allSettled(
+      hosts.filter((host) => host.presentation).map((host) => host.presentation),
+    );
+    const valid =
+      readFileSync(marker, 'utf8') === JSON.stringify({ nonce, sessionId }) &&
+      readFileSync(join(runtime, '.fixture-owner.json'), 'utf8') ===
+        JSON.stringify({ nonce, sessionId });
+    const safe =
+      valid &&
+      cleanup.every(Boolean) &&
+      hosts.every((host) => host.state.cleanup?.confirmedClosed && host.state.cleanup?.markerValid);
+    writeFileSync(
+      join(evidence, 'cleanup.json'),
+      JSON.stringify(
+        {
+          safe,
+          hosts: hosts.map((host) => host.state),
+          leftovers: safe ? [] : [temporary, runtime],
+        },
+        null,
+        2,
+      ),
+      { flag: 'wx', mode: 0o600 },
+    );
+    if (safe) {
+      rmSync(temporary, { recursive: true, force: true });
+      rmSync(runtime, { recursive: true, force: true });
+    }
   }
 }
 prepare();
+const nonce = randomBytes(16).toString('hex'),
+  sessionId = randomUUID(),
+  source = sourceBinding(root),
+  sourceDigest = digest(JSON.stringify(source));
 const parent = process.env.DEVLOOM_EVIDENCE_DIR;
 if (
   !parent ||
@@ -244,9 +287,12 @@ const scenarios = {
   'worker-crash': (path) => group(path, true, 'normal', false, 'worker-crash'),
   'main-crash': (path) => group(path, true, 'normal', false, 'main-crash'),
 };
+const baseScenarios = Object.keys(scenarios);
+scenarios['p1-changes'] = (path) => group(path, false, 'p1-changes', false, '', 'p1-changes');
+scenarios['p1-sync'] = (path) => group(path, false, 'p1-sync', false, '', 'p1-sync');
 const selected =
   process.env.DEVLOOM_LOCAL_GIT_SCENARIOS === undefined
-    ? Object.keys(scenarios)
+    ? baseScenarios
     : process.env.DEVLOOM_LOCAL_GIT_SCENARIOS.split(',').map((name) => name.trim());
 if (
   !selected.length ||
@@ -259,7 +305,18 @@ const result = {
   status: 'fail',
   selected,
   completed: [],
-  fullSuite: selected.length === Object.keys(scenarios).length,
+  fullSuite:
+    selected.length === baseScenarios.length &&
+    baseScenarios.every((name) => selected.includes(name)),
+  fullBaseSuite: false,
+  targetedP1Complete: false,
+  baseScenarios,
+  nonce,
+  sessionId,
+  source,
+  sourceDigest,
+  startedAt: new Date().toISOString(),
+  finishedAt: '',
 };
 try {
   for (const name of selected) {
@@ -268,10 +325,15 @@ try {
     await scenarios[name](path);
     result.completed.push(name);
   }
+  result.fullBaseSuite = baseScenarios.every((name) => result.completed.includes(name));
+  result.targetedP1Complete = ['p1-changes', 'p1-sync'].every((name) =>
+    result.completed.includes(name),
+  );
   result.status = 'pass';
   process.stdout.write(
     `Actual local Git hosts passed (${result.fullSuite ? 'full suite' : 'subset only'}: ${selected.join(',')}): ${evidence}\n`,
   );
 } finally {
+  result.finishedAt = new Date().toISOString();
   writeFileSync(join(evidence, 'run-result.json'), JSON.stringify(result, null, 2));
 }
