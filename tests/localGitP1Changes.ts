@@ -107,7 +107,10 @@ export async function changes(c: Context): Promise<void> {
     disk: readFileSync(join(path, 'conflict.txt'), 'utf8'),
     repositoryMergeStillPending: true,
   });
-  await repository.mergeAbort();
+  await vscode.commands.executeCommand('git.stageAll', repository.rootUri);
+  await repository.commit('native status matrix merge baseline');
+  assert.ok(!existsSync(join(path, '.git/MERGE_HEAD')));
+  assert.equal(git(path, ['status', '--porcelain=v1']), '');
   writeFileSync(join(path, 'fixture.txt'), 'INDEX SENTINEL\n whitespace  \n');
   await repository.add([join(path, 'fixture.txt')]);
   writeFileSync(join(path, 'fixture.txt'), 'WORKING SENTINEL\n whitespace    \n');
@@ -125,6 +128,10 @@ export async function changes(c: Context): Promise<void> {
   const staged = await c.present('staged', {
     texts: ['INDEX SENTINEL'],
     uris: [head.toString(), index.toString()],
+    panes: [
+      { role: 'original', text: 'BASE fixture.txt' },
+      { role: 'modified', text: 'INDEX SENTINEL' },
+    ],
   });
   const cached = await repository.diff(true);
   assert.match(cached, /INDEX SENTINEL/);
@@ -133,6 +140,10 @@ export async function changes(c: Context): Promise<void> {
   const unstaged = await c.present('working', {
     texts: ['WORKING SENTINEL'],
     uris: [working.toString(), uri.toString()],
+    panes: [
+      { role: 'original', text: 'INDEX SENTINEL' },
+      { role: 'modified', text: 'WORKING SENTINEL' },
+    ],
   });
   const diff = await repository.diff(false);
   assert.match(diff, /WORKING SENTINEL/);
@@ -249,7 +260,7 @@ export async function changes(c: Context): Promise<void> {
       Object.keys(allDisk).map((file) => [file, readFileSync(join(path, file), 'utf8')]),
     ),
   );
-  await repository.add([path]);
+  await vscode.commands.executeCommand('git.stageAll', repository.rootUri);
   await repository.commit('native changes cleanup');
   let events = 0;
   const listener = repository.state.onDidChange(() => events++);

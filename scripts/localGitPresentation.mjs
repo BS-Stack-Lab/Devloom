@@ -13,6 +13,7 @@ export async function observePresentation(host, evidence, binding) {
         handled.add(name);
         const request = JSON.parse(readFileSync(join(evidence, name), 'utf8'));
         const response = { ...binding, status: 'fail', request: name, observed: Date.now() };
+        let dom;
         try {
           for (const key of ['nonce', 'sessionId', 'sourceDigest'])
             if (request[key] !== binding[key]) throw new Error('FOREIGN_PRESENTATION');
@@ -27,12 +28,37 @@ export async function observePresentation(host, evidence, binding) {
             mobile: false,
           });
           const end = Date.now() + 10000;
-          let dom;
           do {
             dom = await client.evaluate(
-              `(() => ({title:document.title,text:document.body.innerText,resources:[...document.querySelectorAll('.scm-resource')].map(e=>({text:e.innerText,label:e.getAttribute('aria-label'),title:e.getAttribute('title')})),editors:[...document.querySelectorAll('.monaco-diff-editor')].map(e=>({classes:e.className,text:e.innerText,panes:[...e.querySelectorAll('.editor.original,.editor.modified')].map(p=>({classes:p.className,width:p.getBoundingClientRect().width,text:p.innerText})),whitespace:e.querySelectorAll('.mtkz').length,decorations:e.querySelectorAll('.char-insert,.char-delete,.line-insert,.line-delete,.gutter-insert,.gutter-delete').length})),uris:[...document.querySelectorAll('[data-uri]')].map(e=>e.getAttribute('data-uri'))}))()`,
+              `(() => ({title:document.title,text:document.body.innerText,resources:[...document.querySelectorAll('.scm-resource')].map(e=>({text:e.innerText,label:e.getAttribute('aria-label'),title:e.getAttribute('title')})),editors:[...document.querySelectorAll('.monaco-diff-editor')].map(e=>({classes:e.className,text:e.innerText,panes:[...e.querySelectorAll('.editor.original,.editor.modified')].map(p=>({classes:p.className,width:p.getBoundingClientRect().width,text:p.innerText,visibleLines:[...p.querySelectorAll('.view-lines .view-line')].map(line=>line.textContent)})),whitespace:e.querySelectorAll('.mtkz').length,decorations:e.querySelectorAll('.char-insert,.char-delete,.line-insert,.line-delete,.gutter-insert,.gutter-delete').length})),uris:[...document.querySelectorAll('[data-uri]')].map(e=>e.getAttribute('data-uri'))}))()`,
             );
-            const matches = (request.texts ?? []).every((text) => dom.text.includes(text));
+            const visibleText = dom.editors
+              .flatMap((editor) => editor.panes.flatMap((pane) => pane.visibleLines ?? []))
+              .join('\n')
+              .replaceAll('\u00a0', ' ');
+            const text =
+              request.uris || request.layout || request.ignoreTrimWhitespace !== undefined
+                ? visibleText
+                : dom.text.replaceAll('\u00a0', ' ');
+            const matches = (request.texts ?? []).every((expected) => text.includes(expected));
+            dom.normalizedVisibleText = visibleText;
+            dom.requestedTextsMatched = matches;
+            dom.requestedUrisMatched = (request.uris ?? []).every((uri) =>
+              dom.uris.some((actual) => decodeURIComponent(actual) === decodeURIComponent(uri)),
+            );
+            dom.requestedPanesMatched = (request.panes ?? []).every((expected) =>
+              dom.editors.some((editor) =>
+                editor.panes.some(
+                  (pane) =>
+                    pane.classes.split(' ').includes(expected.role) &&
+                    pane.width > 0 &&
+                    (pane.visibleLines ?? [])
+                      .join('\n')
+                      .replaceAll('\u00a0', ' ')
+                      .includes(expected.text),
+                ),
+              ),
+            );
             const editors = dom.editors.filter((editor) => editor.panes.some((p) => p.width > 0));
             const layout =
               request.layout === undefined ||
@@ -42,11 +68,19 @@ export async function observePresentation(host, evidence, binding) {
                     e.panes.filter((p) => p.width > 80).length >= 2
                   : !e.classes.includes('side-by-side'),
               );
-            if (matches && layout && Date.now() - request.at >= 500) break;
+            if (
+              matches &&
+              dom.requestedUrisMatched &&
+              dom.requestedPanesMatched &&
+              layout &&
+              Date.now() - request.at >= 500
+            )
+              break;
             await delay(100);
           } while (Date.now() < end);
-          if (!(request.texts ?? []).every((text) => dom.text.includes(text)))
-            throw new Error('RENDERED_TEXT_MISSING');
+          if (!dom.requestedTextsMatched) throw new Error('RENDERED_TEXT_MISSING');
+          if (!dom.requestedUrisMatched) throw new Error('RENDERED_URI_MISMATCH');
+          if (!dom.requestedPanesMatched) throw new Error('RENDERED_PANE_CONTENT_MISMATCH');
           if (
             request.layout &&
             !dom.editors.some((e) =>
@@ -63,8 +97,21 @@ export async function observePresentation(host, evidence, binding) {
           const png = name.replace('-request.json', '.png');
           await client.screenshot(join(evidence, png));
           response.screenshot = png;
-        } catch {
-          response.error = 'PRESENTATION_OBSERVATION_FAILED';
+        } catch (error) {
+          response.error = /^[A-Z_]+$/.test(error.message)
+            ? error.message
+            : 'PRESENTATION_OBSERVATION_FAILED';
+          if (dom) response.dom = dom;
+          response.requested = request;
+          if (client) {
+            try {
+              const png = name.replace('-request.json', '-failure.png');
+              await client.screenshot(join(evidence, png));
+              response.screenshot = png;
+            } catch {
+              response.failureScreenshot = 'unavailable';
+            }
+          }
         }
         const path = join(evidence, name.replace('-request.json', '-response.json'));
         if (!existsSync(path))

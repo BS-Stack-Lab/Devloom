@@ -58,11 +58,13 @@ export async function awaitAutofetch(options: {
   timeoutMs?: number;
   interrupted?: () => boolean;
 }) {
+  let lastDiagnostic: unknown;
   const started = Date.now(),
     samples: { at: number; focused: boolean; events: GitEvent[] }[] = [];
   while (Date.now() - started < (options.timeoutMs ?? 30000)) {
     if (options.interrupted?.()) throw new Error('AUTOFETCH_INTERRUPTED');
     const diagnostic = await options.inspect();
+    lastDiagnostic = diagnostic;
     const events = diagnosticEvents(diagnostic);
     const focused = options.focused();
     samples.push({ at: Date.now(), focused, events });
@@ -75,7 +77,8 @@ export async function awaitAutofetch(options: {
     const settled =
       !!diagnostic &&
       typeof diagnostic === 'object' &&
-      (diagnostic as { coordinator?: { state?: string } }).coordinator?.state === 'ready';
+      (diagnostic as { coordinator?: { coordinator?: { state?: string } } }).coordinator
+        ?.coordinator?.state === 'ready';
     if (
       focused &&
       completed &&
@@ -86,6 +89,6 @@ export async function awaitAutofetch(options: {
     await new Promise((done) => setTimeout(done, 50));
   }
   throw Object.assign(new Error('AUTOFETCH_COMPLETION_TIMEOUT'), {
-    diagnostics: { samples, elapsed: Date.now() - started },
+    diagnostics: { samples, lastDiagnostic, elapsed: Date.now() - started },
   });
 }

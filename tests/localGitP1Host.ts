@@ -136,7 +136,15 @@ export async function run(): Promise<void> {
     );
     result.status = 'pass';
   } catch (error) {
-    artifact('failure', { error: error instanceof Error ? error.message : 'P1_FAILURE' });
+    const detail = error && typeof error === 'object' ? (error as Record<string, unknown>) : {};
+    artifact('failure', {
+      error: error instanceof Error ? error.message : 'P1_FAILURE',
+      gitErrorCode: detail.gitErrorCode,
+      gitCommand: detail.gitCommand,
+      exitCode: detail.exitCode,
+      stderr: typeof detail.stderr === 'string' ? detail.stderr.slice(0, 8192) : undefined,
+      stdout: typeof detail.stdout === 'string' ? detail.stdout.slice(0, 8192) : undefined,
+    });
     throw error;
   } finally {
     result.finishedAt = new Date().toISOString();

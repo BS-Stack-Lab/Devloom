@@ -129,8 +129,11 @@ export async function run(): Promise<void> {
     result.status = 'pass';
   } catch (error) {
     result.error = error instanceof Error ? error.stack : String(error);
+    if (error && typeof error === 'object' && 'diagnostics' in error)
+      result.autofetchTimeout = error.diagnostics;
     throw error;
   } finally {
+    result.focusEvents = focusEvents;
     focusListener.dispose();
     if (enabledAt)
       await vscode.workspace

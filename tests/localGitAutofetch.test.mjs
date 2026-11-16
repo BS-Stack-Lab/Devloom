@@ -57,7 +57,7 @@ test('delayed focus and delayed close settle only after both actual observations
     releasedAt: 150,
     focused: () => attempt >= 3,
     inspect: async () => ({
-      coordinator: { state: 'ready' },
+      coordinator: { coordinator: { state: 'ready' } },
       events: ++attempt < 2 ? [start] : [start, close, { event: 'released', at: 201 }],
     }),
     timeoutMs: 1000,
@@ -73,7 +73,27 @@ test('close alone cannot pass before operation release and coordinator readiness
       enabledAt: 100,
       releasedAt: 150,
       focused: () => true,
-      inspect: async () => ({ coordinator: { state: 'active' }, events: [start, close] }),
+      inspect: async () => ({
+        coordinator: { coordinator: { state: 'active' } },
+        events: [start, close],
+      }),
+      timeoutMs: 60,
+    }),
+    /TIMEOUT/,
+  );
+});
+
+test('foreign flat diagnostic shape cannot satisfy the actual nested coordinator contract', async () => {
+  await assert.rejects(
+    awaitAutofetch({
+      before: [],
+      enabledAt: 100,
+      releasedAt: 150,
+      focused: () => true,
+      inspect: async () => ({
+        coordinator: { state: 'ready' },
+        events: [start, close, { event: 'released', at: 201 }],
+      }),
       timeoutMs: 60,
     }),
     /TIMEOUT/,
