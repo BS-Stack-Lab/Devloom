@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import { createRequire } from 'node:module';
+import { setImmediate as flush } from 'node:timers/promises';
 const { completedAutofetch, awaitAutofetch, diagnosticEvents } = createRequire(import.meta.url)(
   '../dist/tests/localGitAutofetch.js',
 );
@@ -99,3 +101,152 @@ test('foreign flat diagnostic shape cannot satisfy the actual nested coordinator
     /TIMEOUT/,
   );
 });
+
+const activeTimers = () =>
+  process.getActiveResourcesInfo().filter((type) => type === 'Timeout').length;
+const completedDiagnostic = {
+  coordinator: { coordinator: { state: 'ready' } },
+  events: [start, close, { event: 'released', at: 201 }],
+};
+const pendingOptions = { before: [], enabledAt: 100, releasedAt: 150, focused: () => true };
+test(
+  'never-settling inspection times out within its own deadline and clears timers',
+  { timeout: 1500 },
+  async () => {
+    const timers = activeTimers(),
+      started = Date.now();
+    await assert.rejects(
+      awaitAutofetch({ ...pendingOptions, inspect: () => new Promise(() => {}), timeoutMs: 40 }),
+      (error) => {
+        assert.equal(error.message, 'AUTOFETCH_COMPLETION_TIMEOUT');
+        assert.ok(error.diagnostics.elapsed >= 40);
+        return true;
+      },
+    );
+    assert.ok(Date.now() - started < 500);
+    await flush();
+    assert.equal(activeTimers(), timers);
+  },
+);
+test(
+  'interruption is observed while diagnostic inspection remains pending',
+  { timeout: 1500 },
+  async () => {
+    const timers = activeTimers();
+    let interrupted = false;
+    const interrupt = setTimeout(() => {
+      interrupted = true;
+    }, 30);
+    const started = Date.now();
+    try {
+      await assert.rejects(
+        awaitAutofetch({
+          ...pendingOptions,
+          inspect: () => new Promise(() => {}),
+          timeoutMs: 1000,
+          interrupted: () => interrupted,
+        }),
+        /AUTOFETCH_INTERRUPTED/,
+      );
+      assert.ok(Date.now() - started < 500);
+    } finally {
+      clearTimeout(interrupt);
+    }
+    await flush();
+    assert.equal(activeTimers(), timers);
+  },
+);
+for (const outcome of ['resolve', 'reject'])
+  test(
+    `late inspection ${outcome} cannot pass or produce an unhandled rejection`,
+    { timeout: 1500 },
+    async () => {
+      let resolveInspect,
+        rejectInspect,
+        passes = 0;
+      const unhandled = [];
+      const inspect = new Promise((resolve, reject) => {
+        resolveInspect = resolve;
+        rejectInspect = reject;
+      });
+      const listener = (error) => unhandled.push(error);
+      process.on('unhandledRejection', listener);
+      const timers = activeTimers();
+      try {
+        const observation = awaitAutofetch({
+          ...pendingOptions,
+          inspect: () => inspect,
+          timeoutMs: 30,
+        }).then((value) => {
+          passes++;
+          return value;
+        });
+        await assert.rejects(observation, /AUTOFETCH_COMPLETION_TIMEOUT/);
+        if (outcome === 'resolve') resolveInspect(completedDiagnostic);
+        else rejectInspect(new Error('late diagnostic rejection'));
+        await flush();
+        await flush();
+        assert.equal(passes, 0);
+        assert.deepEqual(unhandled, []);
+        assert.equal(activeTimers(), timers);
+      } finally {
+        process.off('unhandledRejection', listener);
+      }
+    },
+  );
+test(
+  'successful observation clears pending guard and polling timers',
+  { timeout: 1500 },
+  async () => {
+    const timers = activeTimers();
+    const value = await awaitAutofetch({
+      ...pendingOptions,
+      inspect: async () => completedDiagnostic,
+      timeoutMs: 1000,
+    });
+    assert.equal(value.close.pid, start.pid);
+    await flush();
+    assert.equal(activeTimers(), timers);
+  },
+);
+
+for (const [direction, adjustment] of [
+  ['forward', 3600000],
+  ['backward', -3600000],
+])
+  test(
+    `pending inspection keeps its monotonic deadline after a ${direction} wall-clock jump`,
+    { timeout: 1500, concurrency: false },
+    async (t) => {
+      const timers = activeTimers(),
+        started = performance.now(),
+        wallClock = Date.now;
+      let inspected = false;
+      const observation = awaitAutofetch({
+        ...pendingOptions,
+        timeoutMs: 100,
+        inspect: () => {
+          inspected = true;
+          return new Promise(() => {});
+        },
+      });
+      try {
+        await flush();
+        assert.equal(inspected, true);
+        t.mock.method(Date, 'now', () => wallClock() + adjustment);
+        await assert.rejects(observation, (error) => {
+          assert.equal(error.message, 'AUTOFETCH_COMPLETION_TIMEOUT');
+          assert.ok(error.diagnostics.elapsed >= 100);
+          assert.ok(error.diagnostics.elapsed < 500);
+          return true;
+        });
+        assert.ok(performance.now() - started >= 100);
+        assert.ok(performance.now() - started < 500);
+      } finally {
+        t.mock.restoreAll();
+      }
+      assert.equal(Date.now, wallClock);
+      await flush();
+      assert.equal(activeTimers(), timers);
+    },
+  );
