@@ -1,0 +1,258 @@
+--- a/src/vs/base/parts/storage/common/storage.ts
++++ b/src/vs/base/parts/storage/common/storage.ts
+@@ -4,6 +4,7 @@
+  *--------------------------------------------------------------------------------------------*/
+ 
+ import { ThrottledDelayer } from '../../../common/async.js';
++import { onUnexpectedError } from '../../../common/errors.js';
+ import { Event, PauseableEmitter } from '../../../common/event.js';
+ import { Disposable, IDisposable } from '../../../common/lifecycle.js';
+ import { parse, stringify } from '../../../common/marshalling.js';
+@@ -24,6 +25,7 @@
+ 
+ export interface IStorageOptions {
+ 	readonly hint?: StorageHint;
++	readonly reconcileExternalChanges?: boolean;
+ }
+ 
+ export interface IUpdateRequest {
+@@ -128,6 +130,13 @@
+ 	private pendingDeletes = new Set<string>();
+ 	private pendingInserts = new Map<string, string>();
+ 
++	private invalidation = {};
++	private needsReconcile = false;
++	private writeFailed = false;
++	private initializing = false;
++	private activeUpdate: IUpdateRequest | undefined;
++	private reconciliation: Promise<void> | undefined;
++
+ 	private pendingClose: Promise<void> | undefined = undefined;
+ 
+ 	private readonly whenFlushedCallbacks: Function[] = [];
+@@ -146,6 +155,15 @@
+ 	}
+ 
+ 	private onDidChangeItemsExternal(e: IStorageItemsChangeEvent): void {
++		if (this.options.reconcileExternalChanges) {
++			this.invalidation = {};
++			this.needsReconcile = true;
++			if (!this.reconciliation && this.canReconcile()) {
++				void this.reconcileExternal().catch(onUnexpectedError);
++			}
++			return;
++		}
++
+ 		this._onDidChangeStorage.pause();
+ 
+ 		try {
+@@ -158,6 +176,53 @@
+ 
+ 		} finally {
+ 			this._onDidChangeStorage.resume();
++		}
++	}
++
++	private canReconcile(): boolean {
++		return this.state === StorageState.Initialized && !this._store.isDisposed && !this.initializing && !this.hasPending && !this.activeUpdate;
++	}
++
++	private reconcileExternal(): Promise<void> {
++		if (!this.options.reconcileExternalChanges || !this.needsReconcile || !this.canReconcile()) {
++			return Promise.resolve();
++		}
++		if (!this.reconciliation) {
++			this.reconciliation = this.readExternal().then(() => {
++				this.reconciliation = undefined;
++				return this.reconcileExternal();
++			}, error => {
++				this.reconciliation = undefined;
++				throw error;
++			});
++		}
++		return this.reconciliation;
++	}
++
++	private async readExternal(): Promise<void> {
++		while (this.needsReconcile && this.canReconcile()) {
++			const invalidation = this.invalidation;
++			const items = await this.database.getItems();
++			if (!this.canReconcile()) {
++				return;
++			}
++			if (invalidation !== this.invalidation) {
++				continue;
++			}
++			this.needsReconcile = false;
++			this._onDidChangeStorage.pause();
++			try {
++				for (const [key, value] of items) {
++					this.acceptExternal(key, value);
++				}
++				for (const key of this.cache.keys()) {
++					if (!items.has(key)) {
++						this.acceptExternal(key, undefined);
++					}
++				}
++			} finally {
++				this._onDidChangeStorage.resume();
++			}
+ 		}
+ 	}
+ 
+@@ -210,7 +275,29 @@
+ 			return;
+ 		}
+ 
+-		this.cache = await this.database.getItems();
++		if (!this.options.reconcileExternalChanges) {
++			this.cache = await this.database.getItems();
++			return;
++		}
++		this.initializing = true;
++		const invalidation = this.invalidation;
++		try {
++			const items = await this.database.getItems();
++			if (!this.pendingClose && !this._store.isDisposed) {
++				if (invalidation === this.invalidation && !this.hasPending && !this.activeUpdate) {
++					this.cache.clear();
++					items.forEach((value, key) => this.cache.set(key, value));
++				} else {
++					this.needsReconcile = true;
++				}
++			}
++		} finally {
++			this.initializing = false;
++		}
++		if (!this.pendingClose && !this._store.isDisposed && (this.hasPending || this.activeUpdate)) {
++			await this.doFlush(0);
++		}
++		await this.reconcileExternal();
+ 	}
+ 
+ 	get(key: string, fallbackValue: string): string;
+@@ -280,6 +367,11 @@
+ 			return;
+ 		}
+ 
++		if (this.options.reconcileExternalChanges) {
++			this.writeFailed = false;
++			this.invalidation = {};
++		}
++
+ 		// Update in cache and pending
+ 		this.cache.set(key, valueStr);
+ 		this.pendingInserts.set(key, valueStr);
+@@ -298,10 +390,16 @@
+ 		}
+ 
+ 		// Remove from cache and add to pending
+-		const wasDeleted = this.cache.delete(key);
++		const wasDeleted = this.cache.has(key);
+ 		if (!wasDeleted) {
+ 			return; // Return early if value already deleted
+ 		}
++
++		if (this.options.reconcileExternalChanges) {
++			this.writeFailed = false;
++			this.invalidation = {};
++		}
++		this.cache.delete(key);
+ 
+ 		if (!this.pendingDeletes.has(key)) {
+ 			this.pendingDeletes.add(key);
+@@ -340,6 +438,8 @@
+ 
+ 		// Update state
+ 		this.state = StorageState.Closed;
++		this.invalidation = {};
++		this.writeFailed = false;
+ 
+ 		// Trigger new flush to ensure data is persisted and then close
+ 		// even if there is an error flushing. We must always ensure
+@@ -361,12 +461,20 @@
+ 	}
+ 
+ 	private async flushPending(): Promise<void> {
++		if (this.options.reconcileExternalChanges && this.writeFailed) {
++			throw new Error('Storage update requires an explicit retry');
++		}
++
+ 		if (!this.hasPending) {
+-			return; // return early if nothing to do
++			return this.reconcileExternal();
+ 		}
+ 
+ 		// Get pending data
+ 		const updateRequest: IUpdateRequest = { insert: this.pendingInserts, delete: this.pendingDeletes };
++
++		if (this.options.reconcileExternalChanges) {
++			this.activeUpdate = updateRequest;
++		}
+ 
+ 		// Reset pending data for next run
+ 		this.pendingDeletes = new Set<string>();
+@@ -374,13 +482,33 @@
+ 
+ 		// Update in storage and release any
+ 		// waiters we have once done
+-		return this.database.updateItems(updateRequest).finally(() => {
++		try {
++			await this.database.updateItems(updateRequest);
++		} catch (error) {
++			if (this.options.reconcileExternalChanges) {
++				this.needsReconcile = true;
++				this.writeFailed = true;
++				for (const [key, value] of updateRequest.insert ?? []) {
++					if (!this.pendingInserts.has(key) && !this.pendingDeletes.has(key)) {
++						this.pendingInserts.set(key, value);
++					}
++				}
++				for (const key of updateRequest.delete ?? []) {
++					if (!this.pendingInserts.has(key) && !this.pendingDeletes.has(key)) {
++						this.pendingDeletes.add(key);
++					}
++				}
++			}
++			throw error;
++		} finally {
++			this.activeUpdate = undefined;
+ 			if (!this.hasPending) {
+ 				while (this.whenFlushedCallbacks.length) {
+ 					this.whenFlushedCallbacks.pop()?.();
+ 				}
+ 			}
+-		});
++		}
++		await this.reconcileExternal();
+ 	}
+ 
+ 	async flush(delay?: number): Promise<void> {
+@@ -391,6 +519,7 @@
+ 			return;
+ 		}
+ 
++		this.writeFailed = false;
+ 		return this.doFlush(delay);
+ 	}
+ 
+@@ -403,7 +532,7 @@
+ 	}
+ 
+ 	async whenFlushed(): Promise<void> {
+-		if (!this.hasPending) {
++		if (!this.hasPending && !(this.options.reconcileExternalChanges && this.activeUpdate)) {
+ 			return; // return early if nothing to do
+ 		}
+ 
+--- a/src/vs/platform/storage/common/storageService.ts
++++ b/src/vs/platform/storage/common/storageService.ts
+@@ -51,7 +51,7 @@
+ 
+ 	private createApplicationStorage(): IStorage {
+ 		const storageDataBaseClient = this._register(new ApplicationStorageDatabaseClient(this.remoteService.getChannel('storage')));
+-		const applicationStorage = this._register(new Storage(storageDataBaseClient));
++		const applicationStorage = this._register(new Storage(storageDataBaseClient, { reconcileExternalChanges: true }));
+ 
+ 		this._register(applicationStorage.onDidChangeStorage(e => this.emitDidChangeValue(StorageScope.APPLICATION, e)));
+ 

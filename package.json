@@ -20,7 +20,9 @@
     "test:components": "node --test tests/componentInventory*.test.mjs",
     "test:commitState": "node scripts/runCommitState.mjs",
     "test:normalInstall": "node scripts/runNormalInstallation.mjs",
-    "test:gitTransports": "node scripts/runGitTransports.mjs"
+    "test:gitTransports": "node scripts/runGitTransports.mjs",
+    "test:storageCoherenceUnit": "node --test tests/storageCoherence.test.mjs tests/storageCoherenceRunner.test.mjs",
+    "test:storageCoherence": "node scripts/runStorageCoherence.mjs"
   },
   "devDependencies": {
     "typescript": "npm:@typescript/typescript6@6.0.2",

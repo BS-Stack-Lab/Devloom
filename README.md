@@ -210,3 +210,18 @@ The Code - OSS MIT source license, branded-binary terms, Marketplace access and 
 redistribution permissions remain separate.
 The existing source mapping gate remains `not-passed`; this comparison certifies neither full parity
 nor whole P0 acceptance, licensing approval or unexecuted GitHub account workflows.
+
+## Application storage coherence
+
+```sh
+pnpm run build
+pnpm run upstream:build
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence pnpm run test:storageCoherenceUnit
+DEVLOOM_EVIDENCE_DIR=/absolute/external/evidence pnpm run test:storageCoherence
+```
+
+The application renderer cache opts into authoritative Main-cache snapshots after external invalidations. Pending and in-flight local inserts/deletes remain authoritative until their own update acknowledgement. Event payloads are never replayed. After quiescence, a fresh snapshot admits genuine foreign changes and deletions. Generation fences reject snapshots invalidated by local writes, other events, initialization or shutdown. Failed writes retain current intent for an explicit later flush; failed reads preserve the cache and report failure. Other storage scopes retain their native behavior. Main-cache acknowledgement is separate from disk durability.
+
+The compiled unit suite imports the actual pinned Storage and Emitter classes with a controlled database. The separate native fixture installs an offline companion into fresh nonce-owned temporary roots and uses real ExtensionContext.secrets. It requires positive persisted, encrypted macOS Keychain capability through the exact reviewed metadata-only probe. It checks 12 own transitions, rotation, two ordinary shared-root windows with explicit foreign-operation barriers, an independent root, and clean restart of both a stored value and deletion. Every monitored read checks current expected state once; no historical-value tolerance or read-until-match loop is used.
+
+Synthetic values and their digests stay in process memory. Controls/results contain only nonce, generation, routing and equality/capability predicates. Every run preserves fresh external raw logs and source/compiled hashes; privacy, timeout, capability or ownership ambiguity fails the run. Stages have 45 second bounds and the suite a 240 second deadline. Cleanup uses exact nonce markers and captured OS process identities through the existing owned launcher; unknown paths/processes remain intact. Native execution requires exclusive application ownership coordination and never uses a global Quit or process-name kill. This fixture does not certify account/token lifecycle, sudden-crash durability, other platforms or distribution security.

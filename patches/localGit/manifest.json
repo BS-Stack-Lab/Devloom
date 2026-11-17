@@ -9,6 +9,14 @@
     {
       "path": "patches/localGit/native-git.patch",
       "sha256": "14ec7c0f54d477aa7e22672168c34abc4426a5865ccc5f194b07f4e6f838e3a3"
+    },
+    {
+      "path": "patches/localGit/native-storage-coherence.patch",
+      "sha256": "45f90ec7b5cb98933e4793b8a3e7039090e30f6071a36f094b859bf53edff3c0"
+    },
+    {
+      "path": "patches/localGit/native-auth-storage.patch",
+      "sha256": "917ea4121e896b2d93e4bd82cc9eccd48c7f0f5d81b2afb7d626a3108cbe3578"
     }
   ],
   "files": [
@@ -51,6 +59,21 @@
       "path": "src/vs/editor/browser/widget/diffEditor/features/gutterFeature.ts",
       "before": "23ce6ba202b72c706491f4e43d1aca3362cf38e4871bd7a3803b42ec7ed2cf94",
       "after": "4b50611aeb250623c6e96765f2594a2b93f0e4cd06e1bf774a57f618cfd0f9f4"
+    },
+    {
+      "path": "src/vs/base/parts/storage/common/storage.ts",
+      "before": "57241f57e6410de1dd0388994f284ddc1446a3420e7f015442cdc25a0e36012d",
+      "after": "625f116380430ca8a053a146350abb340b1aa8abb5477dde9b4f34549b03ad5e"
+    },
+    {
+      "path": "src/vs/platform/storage/common/storageService.ts",
+      "before": "9e1e9dfa17e09e119281246b921055c157de94a214f8becefb4ac6af4f1d6126",
+      "after": "125b1ae40a1ab669e72f1dc8aec2064c3d5aa7846c810936eabe32bbb59e363d"
+    },
+    {
+      "path": "src/vs/workbench/electron-browser/desktop.contribution.ts",
+      "before": "35f26aa6eb7c8e9820d788f83ca7d8597c042b12f03a21d02456c04f55b69c62",
+      "after": "590e00341ef1ebcfff7651572b4a33a0cc317f9cf9bf9f19439fec9a714dac1d"
     }
   ]
 }

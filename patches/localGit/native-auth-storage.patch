@@ -1,0 +1,31 @@
+--- a/src/vs/workbench/electron-browser/desktop.contribution.ts
++++ b/src/vs/workbench/electron-browser/desktop.contribution.ts
+@@ -30,6 +30,28 @@
+ import { MAX_ZOOM_LEVEL, MIN_ZOOM_LEVEL } from '../../platform/window/electron-browser/window.js';
+ import product from '../../platform/product/common/product.js';
+ 
++import { Schemas } from '../../base/common/network.js';
++import { ISecretStorageService } from '../../platform/secrets/common/secrets.js';
++import { IEncryptionService } from '../../platform/encryption/common/encryptionService.js';
++import { IUserDataProfilesService } from '../../platform/userDataProfile/common/userDataProfile.js';
++
++CommandsRegistry.registerCommand('_devloom.authStorageCapability', async (accessor: ServicesAccessor) => {
++	const secrets = accessor.get(ISecretStorageService);
++	const encryption = accessor.get(IEncryptionService);
++	const profiles = accessor.get(IUserDataProfilesService);
++	await secrets.get('devloom.auth.capability.reserved.v1');
++	const home = profiles.defaultProfile.globalStorageHome;
++	return {
++		schema: 1,
++		contract: 1,
++		type: secrets.type,
++		encryption: await encryption.isEncryptionAvailable(),
++		provider: await encryption.getKeyStorageProvider(),
++		platform: isMacintosh ? 'darwin' : isWindows ? 'win32' : isLinux ? 'linux' : 'unknown',
++		globalStorageHome: (home.scheme === Schemas.file || home.scheme === Schemas.vscodeUserData) && !home.authority && !home.query && !home.fragment ? home.with({ scheme: Schemas.file }).fsPath : null
++	};
++});
++
+ // Actions
+ (function registerActions(): void {
+ 

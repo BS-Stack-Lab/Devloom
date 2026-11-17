@@ -66,3 +66,112 @@ test('exact patch audit is idempotent and rejects source, manifest and unknown-f
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('registered four same-pin payloads apply pristine and reject mixed state, tamper and unrelated drift', () => {
+  const repository = resolve('.');
+  const vendor = resolve('vendor/code-oss');
+  const manifest = JSON.parse(readFileSync(resolve('patches/localGit/manifest.json'), 'utf8')) as {
+    version: number;
+    commit: string;
+    patches: { path: string; sha256: string }[];
+    files: { path: string; before: string; after: string }[];
+  };
+  assert.equal(manifest.commit, '69047191fc427f2f92828279aae1d90d8eeda7ab');
+  assert.equal(manifest.patches.length, 4);
+  assert.equal(
+    manifest.patches[3].sha256,
+    '917ea4121e896b2d93e4bd82cc9eccd48c7f0f5d81b2afb7d626a3108cbe3578',
+  );
+  assert.deepEqual(manifest.patches.slice(0, 2), [
+    {
+      path: 'patches/localGit/main-broker.patch',
+      sha256: '90a13d73a205fb767afe26fe037bbbd7a699afbe35bd15769bf6328269bef07b',
+    },
+    {
+      path: 'patches/localGit/native-git.patch',
+      sha256: '14ec7c0f54d477aa7e22672168c34abc4426a5865ccc5f194b07f4e6f838e3a3',
+    },
+  ]);
+  assert.deepEqual(
+    manifest.files.slice(8).map((file) => file.path),
+    [
+      'src/vs/base/parts/storage/common/storage.ts',
+      'src/vs/platform/storage/common/storageService.ts',
+      'src/vs/workbench/electron-browser/desktop.contribution.ts',
+    ],
+  );
+  const temporary = mkdtempSync(join(tmpdir(), 'devloom-storage-patches-'));
+  const upstream = join(temporary, 'upstream');
+  mkdirSync(upstream);
+  mkdirSync(join(temporary, 'patches/localGit'), { recursive: true });
+  const git = (args: string[]) => execFileSync('git', args, { cwd: upstream, stdio: 'pipe' });
+  const source = new Map<string, Buffer>();
+  const audit = () =>
+    execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import { auditPatches } from ${JSON.stringify(pathToFileURL(resolve('scripts/patchUpstream.mjs')).href)}; auditPatches(${JSON.stringify(temporary)}, ${JSON.stringify(upstream)}, true);`,
+      ],
+      { stdio: 'pipe' },
+    );
+  try {
+    git(['init']);
+    git(['config', 'user.name', 'Fixture']);
+    git(['config', 'user.email', 'fixture@invalid.local']);
+    for (const file of manifest.files) {
+      const bytes: Buffer = execFileSync('git', ['show', `${manifest.commit}:${file.path}`], {
+        cwd: vendor,
+      });
+      assert.equal(hash(bytes), file.before);
+      source.set(file.path, bytes);
+      const target = join(upstream, file.path);
+      mkdirSync(resolve(target, '..'), { recursive: true });
+      writeFileSync(target, bytes);
+    }
+    writeFileSync(join(upstream, 'unrelated.ts'), 'preserved\n');
+    git(['add', '.']);
+    git(['commit', '-m', 'fixture']);
+    for (const patch of manifest.patches) {
+      const bytes = readFileSync(join(repository, patch.path));
+      assert.equal(hash(bytes), patch.sha256);
+      writeFileSync(join(temporary, patch.path), bytes);
+    }
+    const fixtureManifest = { ...manifest, commit: git(['rev-parse', 'HEAD']).toString().trim() };
+    writeFileSync(
+      join(temporary, 'patches/localGit/manifest.json'),
+      JSON.stringify(fixtureManifest),
+    );
+    audit();
+    audit();
+    for (const file of manifest.files)
+      assert.equal(hash(readFileSync(join(upstream, file.path))), file.after);
+    const file = manifest.files[8];
+    writeFileSync(join(upstream, file.path), source.get(file.path)!);
+    assert.throws(audit);
+    for (const entry of manifest.files)
+      writeFileSync(join(upstream, entry.path), source.get(entry.path)!);
+    audit();
+    writeFileSync(join(upstream, 'unrelated.ts'), 'drift\n');
+    assert.throws(audit);
+    writeFileSync(join(upstream, 'unrelated.ts'), 'preserved\n');
+    writeFileSync(join(upstream, file.path), 'unrecognized source\n');
+    assert.throws(audit);
+    for (const entry of manifest.files)
+      writeFileSync(join(upstream, entry.path), source.get(entry.path)!);
+    audit();
+    const patch = manifest.patches[2];
+    writeFileSync(join(temporary, patch.path), 'tampered\n');
+    assert.throws(audit);
+    writeFileSync(join(temporary, patch.path), readFileSync(join(repository, patch.path)));
+    fixtureManifest.files[8].after = '0'.repeat(64);
+    writeFileSync(
+      join(temporary, 'patches/localGit/manifest.json'),
+      JSON.stringify(fixtureManifest),
+    );
+    assert.throws(audit);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+});
