@@ -193,3 +193,20 @@ Every invocation creates a unique external `component-inventory-*` session throu
 Exit 0 means all functional measurements, owned cleanup and required provenance checks succeeded. Exit 1 preserves a failed report after safe session allocation, or prints a safe error code if allocation was refused. Interrupted runs may have only partial raw evidence and never imply success. stdout names the exact report path, outcome and configuration digest. Read both outcome and memory coverage before interpreting a report.
 
 This Node-only baseline measures no renderer, extension host, Electron UI blocking, GitHub latency or native UI. It makes no packaging, cross-platform or overall P0 completion claim. Synthetic failure tests are labeled separately and do not replace full actual helper runs.
+
+## Reference IDE comparison
+
+Comparison metadata pins Microsoft Visual Studio Code 1.146.0 (stable,
+`69047191fc427f2f92828279aae1d90d8eeda7ab`) and IntelliJ IDEA 2025.3.5
+(`IU-253.33514.17`). Bundled Git/GitHub declarations identify components, not functional coverage.
+The external comparison preserves all 160 original Git/GitHub IDs and acceptance criteria.
+Historical documentation, release-specific documentation, declarations and observations stay separate.
+Selected isolated IDEA observations cover changed/unversioned lists, a HEAD-to-current diff and branch
+controls. Separate index/working diffs and stage/unstage remain unverified. VS Code UI observation
+stopped when the available app binding selected an unrelated window; no user-window action occurred.
+IDEA usability does not prove paid entitlement. New agreements, activation, trials, accounts and
+extension installs were excluded. Historical IDEA 2026.3 help does not certify the installed 2025.3 build.
+The Code - OSS MIT source license, branded-binary terms, Marketplace access and extension
+redistribution permissions remain separate.
+The existing source mapping gate remains `not-passed`; this comparison certifies neither full parity
+nor whole P0 acceptance, licensing approval or unexecuted GitHub account workflows.
