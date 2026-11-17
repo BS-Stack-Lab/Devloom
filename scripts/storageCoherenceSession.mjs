@@ -103,7 +103,7 @@ export class StorageSession {
     this.counter = 0;
     this.deadline = performance.now() + 240000;
     this.env = localEnvironment(root);
-    this.runtime = runtime;
+    this.runtime = { ...runtime, guiExecutable: join(upstream, 'scripts/code.sh') };
     const broker = join(this.temporary, 'broker');
     mkdirSync(broker, { mode: 0o700 });
     this.env.DEVLOOM_GIT_TEST_DIRECTORY = broker;
@@ -113,8 +113,11 @@ export class StorageSession {
     mkdirSync(directory, { mode: 0o700 });
     const userData = join(directory, 'u');
     const extensions = join(directory, 'extensions');
+    const sharedData = join(directory, 'shared');
     mkdirSync(join(userData, 'User'), { recursive: true, mode: 0o700 });
     mkdirSync(extensions, { mode: 0o700 });
+    mkdirSync(sharedData, { mode: 0o700 });
+    write(join(sharedData, '.owner.json'), this.marker);
     write(join(directory, '.owner.json'), this.marker);
     write(join(userData, 'User/settings.json'), {
       'telemetry.telemetryLevel': 'off',
@@ -141,6 +144,8 @@ export class StorageSession {
       identity: lstatSync(directory),
       userData,
       extensions,
+      sharedData,
+      sharedIdentity: lstatSync(sharedData),
       channel,
       workspaces,
       sequences: {},
@@ -200,12 +205,29 @@ export class StorageSession {
     const label = `launch-${++this.counter}`;
     const evidence = join(this.evidence, label);
     mkdirSync(evidence, { mode: 0o700 });
+    assert.equal(realpathSync(profile.sharedData), join(profile.directory, 'shared'));
+    const shared = lstatSync(profile.sharedData);
+    assert.ok(shared.isDirectory() && !shared.isSymbolicLink());
+    assert.equal(shared.uid, process.getuid());
+    assert.equal(shared.mode & 0o777, 0o700);
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(profile.sharedData, '.owner.json'))),
+      this.marker,
+    );
+    let invocation;
     const host = launchOwned({
-      command: cli ? this.runtime.executable : join(upstream, 'scripts/code.sh'),
+      command: cli ? this.runtime.executable : this.runtime.guiExecutable,
       args: [
         ...extra,
+        `--shared-data-dir=${profile.sharedData}`,
         ...developmentArguments(root, profile, window ? profile.workspaces[window] : null),
       ],
+      initialProbe: (pid) => {
+        const observed = probeProcess(pid);
+        assert.ok(observed.args.split(/\s+/).includes(`--shared-data-dir=${profile.sharedData}`));
+        invocation = observed;
+        return observed;
+      },
       cwd: upstream,
       env: cli ? { ...this.env, ELECTRON_RUN_AS_NODE: '1', NODE_ENV: 'development' } : this.env,
       fixtureRoot: this.temporary,
@@ -216,9 +238,16 @@ export class StorageSession {
       evidence,
       timeoutMs: Math.max(1, Math.min(cli ? 45000 : 240000, this.deadline - performance.now())),
     });
+    host.invocation = invocation;
     host.profileRecord = profile;
     host.window = window;
     this.hosts.push(host);
+    write(join(evidence, 'invocation.json'), {
+      cli,
+      userData: profile.userData,
+      sharedData: profile.sharedData,
+      observed: invocation,
+    });
     return host;
   }
   async activation(profile, window, owner) {
@@ -247,9 +276,15 @@ export class StorageSession {
     assert.equal(main.detachedPgid, owner.child.pid);
     assert.equal(extension.detachedPgid, owner.child.pid);
     assert.ok(main.args.split(/\s+/).includes(`--user-data-dir=${profile.userData}`));
+    assert.ok(main.args.split(/\s+/).includes(`--shared-data-dir=${profile.sharedData}`));
     owner.nativeMain = main;
     profile.sequences[active.activation] = 0;
-    write(join(channel, `verified-${active.activation}.json`), { main, extension, active });
+    write(join(channel, `verified-${active.activation}.json`), {
+      main,
+      extension,
+      active,
+      sharedData: profile.sharedData,
+    });
     return active;
   }
   async stage(profile, active, action, generation = 0, deleted = false) {
@@ -325,6 +360,11 @@ export class StorageSession {
         );
         for (const profile of this.profiles) {
           verifyDirectory(profile.directory, profile.identity);
+          verifyDirectory(profile.sharedData, profile.sharedIdentity);
+          assert.deepEqual(
+            JSON.parse(readFileSync(join(profile.sharedData, '.owner.json'))),
+            this.marker,
+          );
           assert.deepEqual(
             JSON.parse(readFileSync(join(profile.directory, '.owner.json'))),
             this.marker,

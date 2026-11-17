@@ -375,3 +375,81 @@ test('fixture construction allocates evidence first and cleans only its captured
   );
   assert.equal(allocated, false);
 });
+
+test('owned Node argv capture binds normal windows and every installer CLI to isolated per-profile shared data', async () => {
+  const session = new StorageSession(process.env.DEVLOOM_EVIDENCE_DIR);
+  const entry = join(session.temporary, 'argv-installer.cjs');
+  const capture = join(session.evidence, 'captured-argv.jsonl');
+  writeFileSync(
+    entry,
+    `
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const argument = name => args.find(value => value.startsWith(name + '='))?.slice(name.length + 1);
+const userData = argument('--user-data-dir');
+const extensions = argument('--extensions-dir');
+const sharedData = argument('--shared-data-dir');
+assert.equal(sharedData, path.join(path.dirname(userData), 'shared'));
+assert.equal(fs.lstatSync(sharedData).mode & 0o777, 0o700);
+assert.equal(JSON.parse(fs.readFileSync(path.join(sharedData, '.owner.json'))).nonce, process.env.STORAGE_ARGV_NONCE);
+fs.appendFileSync(process.env.STORAGE_ARGV_CAPTURE, JSON.stringify({ args, userData, sharedData, cli: process.env.ELECTRON_RUN_AS_NODE === '1' }) + '\\n', { mode: 0o600 });
+const archive = argument('--install-extension');
+const id = 'devloom.storage-coherence-fixture';
+const location = path.join(extensions, id + '-1.0.0');
+if (archive) {
+  fs.cpSync(path.join(path.dirname(archive), 'extension'), location, { recursive: true });
+  fs.writeFileSync(path.join(extensions, 'extensions.json'), JSON.stringify([{ identifier: { id }, version: '1.0.0' }]));
+}
+if (args.includes('--list-extensions')) process.stdout.write(id + '@1.0.0\\n');
+if (argument('--locate-extension')) process.stdout.write(location + '\\n');
+`,
+    { flag: 'wx', mode: 0o600 },
+  );
+  session.runtime = {
+    ...session.runtime,
+    executable: process.execPath,
+    guiExecutable: process.execPath,
+    entry,
+  };
+  session.env.STORAGE_ARGV_CAPTURE = capture;
+  session.env.STORAGE_ARGV_NONCE = session.nonce;
+  try {
+    const primary = await session.profile('primary-argv', ['a', 'b']);
+    const independent = await session.profile('independent-argv', ['d']);
+    for (const [profile, window] of [
+      [primary, 'a'],
+      [primary, 'b'],
+      [independent, 'd'],
+    ]) {
+      const host = session.launch(profile, window, [entry]);
+      assert.equal((await host.completion).status, 'pass');
+      assert.ok(
+        host.invocation.args.split(/\s+/).includes(`--shared-data-dir=${profile.sharedData}`),
+      );
+    }
+    const cli = session.launch(primary, null, [entry], true);
+    assert.equal((await cli.completion).status, 'pass');
+    const invocations = readFileSync(capture, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert.equal(invocations.length, 10);
+    assert.equal(invocations.filter((value) => value.cli).length, 7);
+    const windows = invocations.filter((value) => !value.cli);
+    assert.equal(windows.length, 3);
+    assert.equal(windows[0].sharedData, windows[1].sharedData);
+    assert.notEqual(windows[0].sharedData, windows[2].sharedData);
+    for (const invocation of invocations) {
+      assert.equal(invocation.sharedData, join(invocation.userData, '..', 'shared'));
+      assert.equal(
+        invocation.args.filter((value) => value.startsWith('--shared-data-dir=')).length,
+        1,
+      );
+    }
+  } finally {
+    const cleanup = await session.cleanup();
+    assert.deepEqual(cleanup, { forced: false, leftovers: [] });
+  }
+});
