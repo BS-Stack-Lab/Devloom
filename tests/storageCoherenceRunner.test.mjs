@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import { performance } from 'node:perf_hooks';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import {
   mkdtempSync,
@@ -387,6 +387,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
+if (process.env.ELECTRON_RUN_AS_NODE === '1') assert.equal(args[0], '.');
 const argument = name => args.find(value => value.startsWith(name + '='))?.slice(name.length + 1);
 const userData = argument('--user-data-dir');
 const extensions = argument('--extensions-dir');
@@ -429,7 +430,21 @@ if (argument('--locate-extension')) process.stdout.write(location + '\\n');
         host.invocation.args.split(/\s+/).includes(`--shared-data-dir=${profile.sharedData}`),
       );
     }
-    const cli = session.launch(primary, null, [entry], true);
+    const beforeMalformed = { counter: session.counter, hosts: session.hosts.length };
+    assert.throws(
+      () => session.launch(primary, null, [entry, '--list-extensions'], true),
+      /MISSING_NATIVE_CLI_APP_PATH/,
+    );
+    assert.throws(
+      () => session.launch(primary, null, [entry, '.'], true),
+      /INVALID_NATIVE_CLI_ACTION/,
+    );
+    assert.throws(
+      () => session.launch(primary, null, [entry, '.', '--install-extension='], true),
+      /INVALID_NATIVE_CLI_ACTION/,
+    );
+    assert.deepEqual({ counter: session.counter, hosts: session.hosts.length }, beforeMalformed);
+    const cli = session.launch(primary, null, [entry, '.', '--list-extensions'], true);
     assert.equal((await cli.completion).status, 'pass');
     const invocations = readFileSync(capture, 'utf8')
       .trim()
@@ -442,6 +457,7 @@ if (argument('--locate-extension')) process.stdout.write(location + '\\n');
     assert.equal(windows[0].sharedData, windows[1].sharedData);
     assert.notEqual(windows[0].sharedData, windows[2].sharedData);
     for (const invocation of invocations) {
+      if (invocation.cli) assert.equal(invocation.args[0], '.');
       assert.equal(invocation.sharedData, join(invocation.userData, '..', 'shared'));
       assert.equal(
         invocation.args.filter((value) => value.startsWith('--shared-data-dir=')).length,
@@ -452,4 +468,42 @@ if (argument('--locate-extension')) process.stdout.write(location + '\\n');
     const cleanup = await session.cleanup();
     assert.deepEqual(cleanup, { forced: false, leftovers: [] });
   }
+});
+
+test('actual pinned compiled dev CLI parser preserves installer commands and private roots only with app placeholder', () => {
+  const module = new URL(
+    '../vendor/code-oss/out/vs/platform/environment/node/argvHelper.js',
+    import.meta.url,
+  ).href;
+  const childSource = `
+import { parseCLIProcessArgv } from ${JSON.stringify(module)};
+const common = ['--user-data-dir=/private/tmp/parser-only-user', '--extensions-dir=/private/tmp/parser-only-extensions', '--shared-data-dir=/private/tmp/parser-only-shared'];
+const commands = [['--list-extensions'], ['--install-extension=/private/tmp/parser-only.vsix'], ['--locate-extension=devloom.storage-coherence-fixture']];
+const rows = commands.map(command => ({ positive: parseCLIProcessArgv(['owned-node', 'out/cli.js', '.', ...common, ...command]), missing: parseCLIProcessArgv(['owned-node', 'out/cli.js', ...common, ...command]) }));
+process.stdout.write(JSON.stringify(rows));
+`;
+  const rows = JSON.parse(
+    execFileSync(process.execPath, ['--input-type=module', '-e', childSource], {
+      env: { ...process.env, VSCODE_DEV: '1' },
+      encoding: 'utf8',
+      timeout: 10000,
+      maxBuffer: 65536,
+    }),
+  );
+  assert.equal(rows.length, 3);
+  for (const row of rows) {
+    assert.equal(row.positive['user-data-dir'], '/private/tmp/parser-only-user');
+    assert.equal(row.positive['extensions-dir'], '/private/tmp/parser-only-extensions');
+    assert.equal(row.positive['shared-data-dir'], '/private/tmp/parser-only-shared');
+    assert.deepEqual(row.positive._, []);
+    assert.equal(row.missing['user-data-dir'], undefined);
+    assert.equal(row.missing['extensions-dir'], undefined);
+    assert.equal(row.missing['shared-data-dir'], undefined);
+    assert.equal(row.missing['list-extensions'], false);
+    assert.equal(row.missing['install-extension'], undefined);
+    assert.equal(row.missing['locate-extension'], undefined);
+  }
+  assert.equal(rows[0].positive['list-extensions'], true);
+  assert.deepEqual(rows[1].positive['install-extension'], ['/private/tmp/parser-only.vsix']);
+  assert.deepEqual(rows[2].positive['locate-extension'], ['devloom.storage-coherence-fixture']);
 });

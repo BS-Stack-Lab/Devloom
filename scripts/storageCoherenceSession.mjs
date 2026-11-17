@@ -169,7 +169,7 @@ export class StorageSession {
     });
     profile.artifact = artifact;
     const invoke = async (extra) => {
-      const host = this.launch(profile, null, [this.runtime.entry, ...extra], true);
+      const host = this.launch(profile, null, [this.runtime.entry, '.', ...extra], true);
       const state = await host.completion;
       if (state.status !== 'pass') throw new Error('NATIVE_INSTALL_FAILED');
       return host.output.split(/\r?\n/);
@@ -202,6 +202,25 @@ export class StorageSession {
     return profile;
   }
   launch(profile, window, extra = [], cli = false) {
+    if (cli) {
+      assert.equal(extra[0], this.runtime.entry, 'INVALID_NATIVE_CLI_ENTRY');
+      assert.equal(extra[1], '.', 'MISSING_NATIVE_CLI_APP_PATH');
+      assert.ok(
+        extra.slice(2).every((value) => typeof value === 'string' && value.startsWith('--')),
+        'INVALID_NATIVE_CLI_POSITIONAL',
+      );
+      assert.equal(
+        extra
+          .slice(2)
+          .filter(
+            (value) =>
+              value === '--list-extensions' ||
+              /^--(?:install-extension|locate-extension)=.+$/.test(value),
+          ).length,
+        1,
+        'INVALID_NATIVE_CLI_ACTION',
+      );
+    }
     const label = `launch-${++this.counter}`;
     const evidence = join(this.evidence, label);
     mkdirSync(evidence, { mode: 0o700 });
