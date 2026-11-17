@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { performance } from 'node:perf_hooks';
 
 export class StorageCases {
   private readonly key = 'application-coherence.v1';
@@ -84,8 +85,8 @@ export class StorageCases {
   }
 
   async foreign(): Promise<object> {
-    const deadline = Date.now() + 35000;
-    while (this.events === this.foreignStart && Date.now() < deadline) {
+    const deadline = performance.now() + 35000;
+    while (this.events === this.foreignStart && performance.now() < deadline) {
       await new Promise((done) => setTimeout(done, 25));
     }
     if (this.events === this.foreignStart) throw new Error('FOREIGN_EVENT_DEADLINE');

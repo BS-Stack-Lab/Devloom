@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { performance } from 'node:perf_hooks';
 import {
   constants,
   openSync,
@@ -99,6 +100,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (channel !== join(realpathSync(fixture.channel), window)) throw new Error('INVALID_CHANNEL');
   const activation = randomUUID();
   const started = Date.now();
+  const lifetimeStarted = performance.now();
   const mainPid = Number(process.env.VSCODE_PID);
   if (!Number.isSafeInteger(mainPid) || mainPid < 2) throw new Error('INVALID_MAIN');
   const metadata = {
@@ -144,7 +146,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let stopped = false;
   const poll = async (): Promise<void> => {
     if (stopped || running) return;
-    if (Date.now() - started > 240000) {
+    if (performance.now() - lifetimeStarted > 240000) {
       stopped = true;
       clearInterval(timer);
       return;

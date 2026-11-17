@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { performance } from 'node:perf_hooks';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -11,6 +12,7 @@ import {
   realpathSync,
   chmodSync,
   symlinkSync,
+  existsSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -24,16 +26,14 @@ import {
 } from '../scripts/storageCoherenceSession.mjs';
 
 const require = createRequire(import.meta.url);
-function controlValidator() {
+function controlValidator(name = 'storageCoherenceFixture', sandbox = {}) {
   const exports = {};
-  runInNewContext(
-    readFileSync(new URL('../dist/tests/storageCoherenceFixture.js', import.meta.url), 'utf8'),
-    {
-      exports,
-      process,
-      require: (id) => (id === 'vscode' ? {} : id === './storageCoherenceCases' ? {} : require(id)),
-    },
-  );
+  runInNewContext(readFileSync(new URL(`../dist/tests/${name}.js`, import.meta.url), 'utf8'), {
+    exports,
+    process,
+    require: (id) => (id === 'vscode' ? {} : id === './storageCoherenceCases' ? {} : require(id)),
+    ...sandbox,
+  });
   return exports;
 }
 const nonce = 'a'.repeat(32);
@@ -96,23 +96,33 @@ test('responses require exact window, activation, stage, sequence, process and s
     assert.throws(() => validateResponse({ ...response, ...change }, request, active));
 });
 
-function fixture() {
-  const parent = process.env.DEVLOOM_EVIDENCE_DIR;
+function fixture(options = {}) {
+  const parent = options.parent ?? process.env.DEVLOOM_EVIDENCE_DIR;
   assert.ok(parent, 'Set external DEVLOOM_EVIDENCE_DIR');
-  const temporary = realpathSync(mkdtempSync('/tmp/dsc-unit-'));
-  const nonce = randomBytes(16).toString('hex');
-  const profile = join(temporary, `p-${nonce}`);
-  mkdirSync(profile, { mode: 0o700 });
   const evidence = mkdtempSync(join(parent, 'storage-runner-'));
-  return {
-    temporary,
-    nonce,
-    profile,
-    evidence,
-    fixtureRoot: temporary,
-    sourceRoot: realpathSync(process.cwd()),
-  };
+  let temporary;
+  try {
+    temporary = mkdtempSync('/tmp/dsc-unit-');
+    options.onTemporary?.(temporary);
+    temporary = realpathSync(temporary);
+    const nonce = randomBytes(16).toString('hex');
+    const profile = join(temporary, `p-${nonce}`);
+    (options.makeProfile ?? mkdirSync)(profile, { mode: 0o700 });
+    return {
+      temporary,
+      nonce,
+      profile,
+      evidence,
+      fixtureRoot: temporary,
+      sourceRoot: realpathSync(process.cwd()),
+    };
+  } catch (error) {
+    if (temporary) rmSync(temporary, { recursive: true });
+    rmSync(evidence, { recursive: true });
+    throw error;
+  }
 }
+
 function launch(f, extra = {}) {
   return launchOwned({
     ...f,
@@ -239,7 +249,7 @@ test('privacy scanner refuses plaintext and encoded generated values without rep
 
 test('bounded stage deadline fails without any match-until-success secret read', async () => {
   await assert.rejects(
-    waitFor(() => false, Date.now() + 10),
+    waitFor(() => false, performance.now() + 10),
     /STORAGE_STAGE_DEADLINE/,
   );
   assert.throws(() => new StorageSession(process.cwd()), /EXTERNAL_EVIDENCE_REQUIRED/);
@@ -264,4 +274,104 @@ test('actual compiled control reader refuses oversized, symlinked and nonprivate
   } finally {
     rmSync(f.temporary, { recursive: true });
   }
+});
+
+test('stage duration and compiled foreign-event deadline ignore isolated forward/back wall-clock jumps', async () => {
+  const source = readFileSync(
+    new URL('../scripts/storageCoherenceSession.mjs', import.meta.url),
+    'utf8',
+  );
+  const begin = source.indexOf('export async function waitFor(');
+  const end = source.indexOf('\nexport function validateResponse', begin);
+  assert.ok(begin > 0 && end > begin);
+  for (const jump of [-3600000, 3600000]) {
+    let monotonic = 0,
+      wall = 0,
+      timers = 0,
+      observations = 0;
+    const sandbox = {
+      performance: { now: () => monotonic },
+      Date: { now: () => wall },
+      setTimeout: (done, delay) => {
+        if (++timers > 8) throw new Error('ISOLATED_CLOCK_TEST_BOUND');
+        monotonic += delay;
+        wall += jump;
+        done();
+      },
+    };
+    const actualWaitFor = runInNewContext(
+      `${source.slice(begin, end).replace('export ', '')}\nwaitFor`,
+      sandbox,
+    );
+    await assert.rejects(
+      actualWaitFor(() => {
+        observations++;
+        return false;
+      }, 100),
+      /STORAGE_STAGE_DEADLINE/,
+    );
+    assert.equal(observations, 4);
+    assert.equal(timers, 4);
+    assert.equal(monotonic, 100);
+    monotonic = 0;
+    wall = 0;
+    timers = 0;
+    const cases = controlValidator('storageCoherenceCases', {
+      Date: sandbox.Date,
+      require: (id) =>
+        id === 'node:perf_hooks' ? { performance: sandbox.performance } : require(id),
+      setTimeout: (done, delay) => {
+        assert.equal(delay, 25);
+        if (++timers > 8) throw new Error('ISOLATED_CLOCK_TEST_BOUND');
+        monotonic += 10000;
+        wall += jump;
+        done();
+      },
+    });
+    let reads = 0;
+    const instance = new cases.StorageCases(
+      {
+        onDidChange: () => ({ dispose() {} }),
+        get: () => {
+          reads++;
+        },
+      },
+      nonce,
+    );
+    await assert.rejects(instance.foreign(), /FOREIGN_EVENT_DEADLINE/);
+    assert.equal(timers, 4);
+    assert.equal(reads, 0);
+    instance.dispose();
+  }
+});
+
+test('fixture construction allocates evidence first and cleans only its captured fresh temporary on failure', () => {
+  const captured = [];
+  assert.throws(
+    () =>
+      fixture({
+        makeProfile: () => {
+          throw new Error('INJECTED_PROFILE_CONSTRUCTION');
+        },
+        onTemporary: (path) => captured.push(realpathSync(path)),
+      }),
+    /INJECTED_PROFILE_CONSTRUCTION/,
+  );
+  assert.equal(captured.length, 1);
+  assert.equal(existsSync(captured[0]), false);
+  let allocated = false;
+  assert.throws(
+    () =>
+      fixture({
+        parent: join(
+          process.env.DEVLOOM_EVIDENCE_DIR,
+          `missing-${randomBytes(16).toString('hex')}`,
+        ),
+        onTemporary: () => {
+          allocated = true;
+        },
+      }),
+    /ENOENT/,
+  );
+  assert.equal(allocated, false);
 });

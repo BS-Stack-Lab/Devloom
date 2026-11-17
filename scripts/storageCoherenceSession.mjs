@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import { randomBytes, createHash } from 'node:crypto';
 import {
   existsSync,
@@ -22,8 +23,8 @@ import { root, upstream } from './upstream.mjs';
 export const write = (path, value) =>
   writeFileSync(path, `${JSON.stringify(value)}\n`, { flag: 'wx', mode: 0o600 });
 export async function waitFor(inspect, deadline) {
-  const end = Math.min(deadline, Date.now() + 45000);
-  while (Date.now() < end) {
+  const end = Math.min(deadline, performance.now() + 45000);
+  while (performance.now() < end) {
     const value = await inspect();
     if (value) return value;
     await new Promise((done) => setTimeout(done, 25));
@@ -100,7 +101,7 @@ export class StorageSession {
     this.hosts = [];
     this.profiles = [];
     this.counter = 0;
-    this.deadline = Date.now() + 240000;
+    this.deadline = performance.now() + 240000;
     this.env = localEnvironment(root);
     this.runtime = runtime;
     const broker = join(this.temporary, 'broker');
@@ -213,7 +214,7 @@ export class StorageSession {
       sessionId: label,
       sourceRoot: root,
       evidence,
-      timeoutMs: Math.max(1, Math.min(cli ? 45000 : 240000, this.deadline - Date.now())),
+      timeoutMs: Math.max(1, Math.min(cli ? 45000 : 240000, this.deadline - performance.now())),
     });
     host.profileRecord = profile;
     host.window = window;
@@ -252,7 +253,7 @@ export class StorageSession {
     return active;
   }
   async stage(profile, active, action, generation = 0, deleted = false) {
-    assert.ok(Date.now() < this.deadline, 'SUITE_DEADLINE');
+    assert.ok(performance.now() < this.deadline, 'SUITE_DEADLINE');
     const sequence = ++profile.sequences[active.activation];
     const stage = `stage-${active.activation}-${sequence}-${action}`;
     const request = {
