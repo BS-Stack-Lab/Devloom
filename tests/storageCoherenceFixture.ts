@@ -126,7 +126,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       observed.contract === 1 &&
       observed.type === 'persisted' &&
       observed.encryption === true &&
-      observed.provider === 'keychain' &&
+      observed.provider === 'keychain_access' &&
       observed.platform === 'darwin' &&
       typeof observed.globalStorageHome === 'string' &&
       observed.globalStorageHome.startsWith(`${fixture.profile}/`);

@@ -21,7 +21,7 @@
     "test:commitState": "node scripts/runCommitState.mjs",
     "test:normalInstall": "node scripts/runNormalInstallation.mjs",
     "test:gitTransports": "node scripts/runGitTransports.mjs",
-    "test:storageCoherenceUnit": "node --test tests/storageCoherence.test.mjs tests/storageCoherenceRunner.test.mjs",
+    "test:storageCoherenceUnit": "node --test tests/storageCoherence.test.mjs tests/storageCoherenceLifecycle.test.mjs tests/storageCoherenceRunner.test.mjs",
     "test:storageCoherence": "node scripts/runStorageCoherence.mjs"
   },
   "devDependencies": {

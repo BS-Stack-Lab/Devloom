@@ -242,10 +242,19 @@ export class StorageSession {
         ...developmentArguments(root, profile, window ? profile.workspaces[window] : null),
       ],
       initialProbe: (pid) => {
-        const observed = probeProcess(pid);
-        assert.ok(observed.args.split(/\s+/).includes(`--shared-data-dir=${profile.sharedData}`));
-        invocation = observed;
-        return observed;
+        const deadline = performance.now() + 5000;
+        const wait = new Int32Array(new SharedArrayBuffer(4));
+        while (performance.now() < deadline) {
+          try {
+            const observed = probeProcess(pid);
+            if (observed.args.split(/\s+/).includes(`--shared-data-dir=${profile.sharedData}`)) {
+              invocation = observed;
+              return observed;
+            }
+          } catch {}
+          Atomics.wait(wait, 0, 0, 25);
+        }
+        throw new Error('INITIAL_PROCESS_CAPTURE_TIMEOUT');
       },
       cwd: upstream,
       env: cli ? { ...this.env, ELECTRON_RUN_AS_NODE: '1', NODE_ENV: 'development' } : this.env,

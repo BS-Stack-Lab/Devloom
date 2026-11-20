@@ -1,3 +1,5 @@
+diff --git a/src/vs/base/parts/storage/common/storage.ts b/src/vs/base/parts/storage/common/storage.ts
+index 68a46e2f..4d25f672 100644
 --- a/src/vs/base/parts/storage/common/storage.ts
 +++ b/src/vs/base/parts/storage/common/storage.ts
 @@ -4,6 +4,7 @@
@@ -8,7 +10,7 @@
  import { Event, PauseableEmitter } from '../../../common/event.js';
  import { Disposable, IDisposable } from '../../../common/lifecycle.js';
  import { parse, stringify } from '../../../common/marshalling.js';
-@@ -24,6 +25,7 @@
+@@ -24,6 +25,7 @@ export enum StorageHint {
  
  export interface IStorageOptions {
  	readonly hint?: StorageHint;
@@ -16,7 +18,7 @@
  }
  
  export interface IUpdateRequest {
-@@ -128,6 +130,13 @@
+@@ -128,6 +130,13 @@ export class Storage extends Disposable implements IStorage {
  	private pendingDeletes = new Set<string>();
  	private pendingInserts = new Map<string, string>();
  
@@ -30,7 +32,7 @@
  	private pendingClose: Promise<void> | undefined = undefined;
  
  	private readonly whenFlushedCallbacks: Function[] = [];
-@@ -146,6 +155,15 @@
+@@ -146,6 +155,15 @@ export class Storage extends Disposable implements IStorage {
  	}
  
  	private onDidChangeItemsExternal(e: IStorageItemsChangeEvent): void {
@@ -46,13 +48,10 @@
  		this._onDidChangeStorage.pause();
  
  		try {
-@@ -158,6 +176,53 @@
+@@ -161,6 +179,53 @@ export class Storage extends Disposable implements IStorage {
+ 		}
+ 	}
  
- 		} finally {
- 			this._onDidChangeStorage.resume();
-+		}
-+	}
-+
 +	private canReconcile(): boolean {
 +		return this.state === StorageState.Initialized && !this._store.isDisposed && !this.initializing && !this.hasPending && !this.activeUpdate;
 +	}
@@ -97,10 +96,13 @@
 +			} finally {
 +				this._onDidChangeStorage.resume();
 +			}
- 		}
- 	}
- 
-@@ -210,7 +275,29 @@
++		}
++	}
++
+ 	private acceptExternal(key: string, value: string | undefined): void {
+ 		if (this.state === StorageState.Closed) {
+ 			return; // Return early if we are already closed
+@@ -210,7 +275,29 @@ export class Storage extends Disposable implements IStorage {
  			return;
  		}
  
@@ -131,19 +133,18 @@
  	}
  
  	get(key: string, fallbackValue: string): string;
-@@ -280,6 +367,11 @@
+@@ -280,6 +367,10 @@ export class Storage extends Disposable implements IStorage {
  			return;
  		}
  
 +		if (this.options.reconcileExternalChanges) {
-+			this.writeFailed = false;
 +			this.invalidation = {};
 +		}
 +
  		// Update in cache and pending
  		this.cache.set(key, valueStr);
  		this.pendingInserts.set(key, valueStr);
-@@ -298,10 +390,16 @@
+@@ -298,11 +389,16 @@ export class Storage extends Disposable implements IStorage {
  		}
  
  		// Remove from cache and add to pending
@@ -152,16 +153,16 @@
  		if (!wasDeleted) {
  			return; // Return early if value already deleted
  		}
-+
+ 
 +		if (this.options.reconcileExternalChanges) {
-+			this.writeFailed = false;
 +			this.invalidation = {};
 +		}
 +		this.cache.delete(key);
- 
++
  		if (!this.pendingDeletes.has(key)) {
  			this.pendingDeletes.add(key);
-@@ -340,6 +438,8 @@
+ 		}
+@@ -340,6 +436,8 @@ export class Storage extends Disposable implements IStorage {
  
  		// Update state
  		this.state = StorageState.Closed;
@@ -170,7 +171,7 @@
  
  		// Trigger new flush to ensure data is persisted and then close
  		// even if there is an error flushing. We must always ensure
-@@ -361,12 +461,20 @@
+@@ -361,26 +459,53 @@ export class Storage extends Disposable implements IStorage {
  	}
  
  	private async flushPending(): Promise<void> {
@@ -180,19 +181,19 @@
 +
  		if (!this.hasPending) {
 -			return; // return early if nothing to do
-+			return this.reconcileExternal();
++			return;
  		}
  
  		// Get pending data
  		const updateRequest: IUpdateRequest = { insert: this.pendingInserts, delete: this.pendingDeletes };
-+
+ 
 +		if (this.options.reconcileExternalChanges) {
 +			this.activeUpdate = updateRequest;
 +		}
- 
++
  		// Reset pending data for next run
  		this.pendingDeletes = new Set<string>();
-@@ -374,13 +482,33 @@
+ 		this.pendingInserts = new Map<string, string>();
  
  		// Update in storage and release any
  		// waiters we have once done
@@ -224,11 +225,10 @@
  			}
 -		});
 +		}
-+		await this.reconcileExternal();
  	}
  
  	async flush(delay?: number): Promise<void> {
-@@ -391,6 +519,7 @@
+@@ -391,19 +516,24 @@ export class Storage extends Disposable implements IStorage {
  			return;
  		}
  
@@ -236,7 +236,18 @@
  		return this.doFlush(delay);
  	}
  
-@@ -403,7 +532,7 @@
+ 	private async doFlush(delay?: number): Promise<void> {
+ 		if (this.options.hint === StorageHint.STORAGE_IN_MEMORY) {
+-			return this.flushPending(); // return early if in-memory
++			await this.flushPending(); // return early if in-memory
++		} else {
++			await this.flushDelayer.trigger(() => this.flushPending(), delay);
+ 		}
+ 
+-		return this.flushDelayer.trigger(() => this.flushPending(), delay);
++		if (this.options.reconcileExternalChanges && this.needsReconcile) {
++			void this.reconcileExternal().catch(onUnexpectedError);
++		}
  	}
  
  	async whenFlushed(): Promise<void> {
@@ -245,9 +256,11 @@
  			return; // return early if nothing to do
  		}
  
+diff --git a/src/vs/platform/storage/common/storageService.ts b/src/vs/platform/storage/common/storageService.ts
+index 9bb5d71c..e752c614 100644
 --- a/src/vs/platform/storage/common/storageService.ts
 +++ b/src/vs/platform/storage/common/storageService.ts
-@@ -51,7 +51,7 @@
+@@ -51,7 +51,7 @@ export class RemoteStorageService extends AbstractStorageService {
  
  	private createApplicationStorage(): IStorage {
  		const storageDataBaseClient = this._register(new ApplicationStorageDatabaseClient(this.remoteService.getChannel('storage')));

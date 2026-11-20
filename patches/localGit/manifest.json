@@ -12,7 +12,7 @@
     },
     {
       "path": "patches/localGit/native-storage-coherence.patch",
-      "sha256": "45f90ec7b5cb98933e4793b8a3e7039090e30f6071a36f094b859bf53edff3c0"
+      "sha256": "4c398aa75bcf69dd60ffff47c48b8c7d93996730cb0c7eb58dc6ca9cc0cf7892"
     },
     {
       "path": "patches/localGit/native-auth-storage.patch",
@@ -63,7 +63,7 @@
     {
       "path": "src/vs/base/parts/storage/common/storage.ts",
       "before": "57241f57e6410de1dd0388994f284ddc1446a3420e7f015442cdc25a0e36012d",
-      "after": "625f116380430ca8a053a146350abb340b1aa8abb5477dde9b4f34549b03ad5e"
+      "after": "82fa2e67356e403c4a45c114501eb66da8ae2575bbc7d2a701968f763e1895e8"
     },
     {
       "path": "src/vs/platform/storage/common/storageService.ts",
